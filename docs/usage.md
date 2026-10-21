@@ -292,3 +292,18 @@ Gaddi's existing action policy remains responsible for classifying one-way actio
 Text and structured output redact known process/configuration credentials, credential-labelled fields, bearer tokens, common service tokens and private keys. Images and opaque resources are not forwarded. Unlabelled secrets in ordinary note or page prose cannot be reliably identified; use trusted sources whose credentials live outside their readable content. This bridge trusts the owner-selected local server executables and their existing safety mechanisms. MCP annotations are hints, not an isolation boundary ([MCP tool annotations](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-06-18/schema.ts)).
 
 For an isolated acceptance trial, `node scripts/live-bridge.ts start` discovers the local Gaddi and OmniRead launch commands from Codex's configuration, adds qmd, and starts a separate server and quick tunnel. Its private runtime receipt is `.scratch/bridge-live.json`; `control pending`, `control approve ID` and `control stop` operate only that instance. Its synthetic Delete page is for observing HELD, with no approval. The trial does not change production service or saved configuration.
+
+## Wake modes
+
+The configured level values are 0 Instant, 1 Medium, 2 High, 3 Extra High and 4 Pro. **New labels default to `native`; existing labels keep their recorded mode, or `configured` for saved row/level settings without an explicit mode.** Native wakes inherit the current defaults of a fresh ChatGPT chat, do not open the picker, and have no extension picker observation; a label such as `sol` is therefore a routing name, not proof of the model or effort behind it. Use `node src/cli.ts worker set sol --wake-mode configured` before first use when you require strict saved picker-row/effort verification. Configured wakes refuse an unavailable level instead of remapping it. Used labels cannot change wake mode, and deleting/recreating a used label does not clear its retained mode fence. Used legacy configured labels may explicitly restore `configured`. Composer jobs always select the saved settings.
+
+## Platform support
+
+| Capability | macOS | Linux |
+|---|---|---|
+| Gateway, ChatGPT workers, attachments and browser wakes | Available | Available |
+| Local file and Git tools | Available | Available |
+| Local speech transcription | Apple Speech; Command Line Tools required | Unavailable; original audio can still be delivered |
+| Workbench shell commands | Command Line Tools required | Unavailable; run commands in your own terminal |
+| Gaddi, OmniRead and qmd tools bridge | Available | Unavailable |
+| Optional native-wake focus restoration | Unavailable | KDE Wayland with KWin; other desktops continue without it |
