@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Crossfeed Chat Wake settings</title>
+<link rel="icon" type="image/svg+xml" href="icons/favicon.svg">
+<h1>Crossfeed Chat Wake</h1>
+<p>Match the pairing code below with <code>crossfeed-chat extension list</code>, then approve it with <code>crossfeed-chat extension approve CODE</code>. This extension opens a fresh chat for each saved worker and archives its replaced chat.</p>
+<form id="settings">
+  <p><label>Local API URL <input id="api" type="url" value="http://127.0.0.1:4319" required></label></p>
+  <button type="submit">Save</button>
+</form>
+<p id="status" role="status"></p>
+<p>Pairing code: <strong id="code">Waiting for the local server</strong></p>
+<script type="module" src="options.js"></script></html>

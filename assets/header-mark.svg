@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cf-interactive" tabindex="0" width="42" height="32" viewBox="0 7 42 32" role="img" aria-label="Crossfeed Chat source tank"><style>:root{--i:#14130f;--p:#ffffff;--t:#f1dfd4;--h:#c4552a;--bright:#14130f;--quiet:#4d493f}
+@media(prefers-color-scheme:dark){:root{--i:#e9e6df;--p:#0d1117;--t:#301e15;--bright:#e9e6df;--quiet:#bdb8b0}}
+.bright{fill:var(--bright)}.quiet{fill:var(--quiet)}.star{fill:var(--h)}
+.cf-bar{transform-origin:0 0;transform-box:view-box}
+/* GitHub uses .cf-loop. Inline web marks use .cf-interactive: hover/focus
+   or .is-active during a host-controlled tap, with no animation on load. */
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-l{animation:cf-left 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-r{animation:cf-right 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-bar{animation:cf-valve 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-flow{animation:cf-arrival 8s linear infinite,cf-flow-visible 8s steps(1,end) infinite}
+@keyframes cf-left{
+  0%,25%{transform:translateY(0px)}
+  50%,70%{transform:translateY(7px)}
+  85%,100%{transform:translateY(0px)}
+}
+@keyframes cf-right{
+  0%,25%{transform:translateY(0px)}
+  50%,70%{transform:translateY(-7px)}
+  85%,100%{transform:translateY(0px)}
+}
+@keyframes cf-valve{
+  0%,10%{transform:rotate(0deg)}
+  15%,55%{transform:rotate(90deg)}
+  60%,100%{transform:rotate(0deg)}
+}
+@keyframes cf-arrival{
+  0%,15%{stroke-dashoffset:1}
+  25%,60%{stroke-dashoffset:0}
+  65%,100%{stroke-dashoffset:1}
+}
+@keyframes cf-flow-visible{
+  0%{opacity:0}
+  15%{opacity:1}
+  55%,100%{opacity:0}
+}
+@media(prefers-reduced-motion:reduce){
+  .cf-l,.cf-r,.cf-bar,.cf-flow{animation:none!important}
+  .cf-flow{opacity:0}
+}
+</style><g id="source-tanks" transform="translate(-1.65 36.52) scale(1.1)" stroke-width="1.185">
+<defs><clipPath id="left-tank"><path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z"/></clipPath><clipPath id="right-tank"><rect x="29.592" y="-24.008" width="8.415" height="22.823" rx="3.008"/></clipPath></defs>
+<path d="M12 -7H29" stroke="var(--i)"/>
+<path class="cf-flow" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="1" opacity="0" d="M12 -7H29" stroke="var(--h)"/>
+<path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z" fill="var(--p)"/><rect x="29" y="-24.6" width="9.6" height="24.008" rx="3.6" fill="var(--p)"/>
+<g clip-path="url(#left-tank)"><g class="cf-l"><rect x="2.4" y="-18.4" width="9.6" height="40" fill="var(--t)"/><path d="M2.4 -18.4H12" stroke="var(--h)"/></g></g>
+<g clip-path="url(#right-tank)"><g class="cf-r"><rect x="29" y="-4.4" width="9.6" height="40" fill="var(--t)"/><path d="M29 -4.4H38.6" stroke="var(--h)"/></g></g>
+<path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z" fill="none" stroke="var(--i)"/><rect x="29" y="-24.6" width="9.6" height="24.008" rx="3.6" fill="none" stroke="var(--i)"/>
+<circle cx="20.5" cy="-7" r="3.292" fill="var(--p)" stroke="var(--i)"/>
+<g transform="translate(20.5 -7)"><g class="cf-bar"><rect x="-.6425" y="-2.8" width="1.285" height="5.6" rx=".642" fill="var(--h)"/></g></g>
+</g></svg>

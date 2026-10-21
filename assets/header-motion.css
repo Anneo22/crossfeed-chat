@@ -1,0 +1,35 @@
+/* GitHub uses .cf-loop. Inline web marks use .cf-interactive: hover/focus
+   or .is-active during a host-controlled tap, with no animation on load. */
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-l{animation:cf-left 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-r{animation:cf-right 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-bar{animation:cf-valve 8s linear infinite}
+:is(.cf-loop,.cf-interactive:hover,.cf-interactive:focus-visible,.cf-interactive.is-active) .cf-flow{animation:cf-arrival 8s linear infinite,cf-flow-visible 8s steps(1,end) infinite}
+@keyframes cf-left{
+  0%,25%{transform:translateY(0px)}
+  50%,70%{transform:translateY(7px)}
+  85%,100%{transform:translateY(0px)}
+}
+@keyframes cf-right{
+  0%,25%{transform:translateY(0px)}
+  50%,70%{transform:translateY(-7px)}
+  85%,100%{transform:translateY(0px)}
+}
+@keyframes cf-valve{
+  0%,10%{transform:rotate(0deg)}
+  15%,55%{transform:rotate(90deg)}
+  60%,100%{transform:rotate(0deg)}
+}
+@keyframes cf-arrival{
+  0%,15%{stroke-dashoffset:1}
+  25%,60%{stroke-dashoffset:0}
+  65%,100%{stroke-dashoffset:1}
+}
+@keyframes cf-flow-visible{
+  0%{opacity:0}
+  15%{opacity:1}
+  55%,100%{opacity:0}
+}
+@media(prefers-reduced-motion:reduce){
+  .cf-l,.cf-r,.cf-bar,.cf-flow{animation:none!important}
+  .cf-flow{opacity:0}
+}

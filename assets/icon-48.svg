@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-labelledby="title"><title id="title">Crossfeed Chat 48 pixel toolbar icon</title><g id="square-chat-tank" transform="translate(48 0) scale(-1 1)" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">
+<defs><clipPath id="tank-48-light"><path d="M21 4.5H36Q45 4.5 45 13.5V28.5Q45 37.5 36 37.5H28.5L19.5 43.5V37.5Q12 37.5 12 30V13.5Q12 4.5 21 4.5Z"/></clipPath></defs>
+<path id="outgoing-feed" d="M1.5 28.5H12" fill="none" stroke="#14130F"/>
+<path id="chat-tank" d="M21 4.5H36Q45 4.5 45 13.5V28.5Q45 37.5 36 37.5H28.5L19.5 43.5V37.5Q12 37.5 12 30V13.5Q12 4.5 21 4.5Z" fill="#FAF9F4"/>
+<g clip-path="url(#tank-48-light)"><rect x="12" y="13.5" width="33" height="48" fill="#F1DFD4"/>
+<path id="fuel-level" d="M12 13.5H45" stroke="#C4552A"/></g>
+<path d="M21 4.5H36Q45 4.5 45 13.5V28.5Q45 37.5 36 37.5H28.5L19.5 43.5V37.5Q12 37.5 12 30V13.5Q12 4.5 21 4.5Z" fill="none" stroke="#14130F"/>
+<g id="feed-valve"><circle cx="6" cy="28.5" r="4.5" fill="#FAF9F4" stroke="#14130F"/>
+<path d="M6 25.5V31.5" stroke="#C4552A"/></g></g></svg>

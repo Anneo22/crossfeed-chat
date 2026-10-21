@@ -1,0 +1,43 @@
+Crossfeed Chat
+Copyright (c) 2026 Anneo22
+
+Crossfeed Chat is a small redesign of the ChatGPT gateway in PiLink, created
+by Rocco Angelella and the PiLink contributors:
+https://github.com/roccoangelella/PiLink
+
+Its gateway_exchange protocol, paired OAuth approval flow, and validation
+rules derive from PiLink. The Chat/Work check in extension/page.js adapts PiLink's
+browser-extension/chat-mode.js; the fresh-chat wake sequence follows PiLink's worker launcher. PiLink's MIT copyright and
+permission notice are retained below. The optional src/wake-focus.ts KWin
+restoration script and its short-lived DBus preparation adapt PiLink's
+src/llm-gateway-kwin-focus.ts, also under the PiLink MIT terms below.
+
+Crossfeed Chat modifications are licensed under Apache 2.0 (see LICENSE).
+The upstream-derived code retains the MIT terms reproduced here.
+
+MIT License
+
+Copyright (c) 2026 PiLink contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The Crossfeed name and its marks are all rights reserved and are outside the
+code's Apache 2.0 licence. Keep them in an unmodified copy; replace them before
+shipping a modified version under your own name. ChatGPT, OpenAI and Chrome
+are trademarks of their owners; no endorsement is implied.

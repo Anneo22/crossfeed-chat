@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><title>Crossfeed Chat</title><style>:root{--i:#E9E6DF;--p:#141311;--t:#301E15;--h:#C4552A}@media(prefers-color-scheme:light){:root{--i:#14130F;--p:#FAF9F4;--t:#F1DFD4}}</style><rect width="16" height="16" rx="3" fill="var(--p)"/><g id="square-chat-tank" transform="translate(16 0) scale(-1 1)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1">
+<defs><clipPath id="tank-tab"><path d="M7.5 1.5H11.5Q14.5 1.5 14.5 4.5V9.5Q14.5 12.5 11.5 12.5H9.5L6.5 14.5V12.5Q4.5 12.5 4.5 10.5V4.5Q4.5 1.5 7.5 1.5Z"/></clipPath></defs>
+<path id="outgoing-feed" d="M0.5 9.5H4.5" fill="none" stroke="var(--i)"/>
+<path id="chat-tank" d="M7.5 1.5H11.5Q14.5 1.5 14.5 4.5V9.5Q14.5 12.5 11.5 12.5H9.5L6.5 14.5V12.5Q4.5 12.5 4.5 10.5V4.5Q4.5 1.5 7.5 1.5Z" fill="var(--p)"/>
+<g clip-path="url(#tank-tab)"><rect x="4.5" y="4.5" width="10.0" height="16" fill="var(--t)"/>
+<path id="fuel-level" d="M4.5 4.5H14.5" stroke="var(--h)"/></g>
+<path d="M7.5 1.5H11.5Q14.5 1.5 14.5 4.5V9.5Q14.5 12.5 11.5 12.5H9.5L6.5 14.5V12.5Q4.5 12.5 4.5 10.5V4.5Q4.5 1.5 7.5 1.5Z" fill="none" stroke="var(--i)"/>
+<g id="feed-valve"><circle cx="2.5" cy="9.5" r="1.5" fill="var(--p)" stroke="var(--i)"/>
+<path d="M2.5 8.5V10.5" stroke="var(--h)"/></g></g></svg>

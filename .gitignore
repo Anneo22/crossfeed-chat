@@ -1,0 +1,10 @@
+.scratch/
+node_modules
+dist
+CHANGES.log
+LIVE-RESULT-BRIDGE.md
+
+.scratch-STATE.md
+.wake-check-runs/
+__pycache__/
+*.pyc

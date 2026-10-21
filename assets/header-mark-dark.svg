@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.5 -27 50.5 29.5" width="56" height="28" role="img" aria-labelledby="title"><title id="title">Crossfeed Chat source tank</title><style>.cf-l{
+  animation:source-transfer 6.5s ease-in-out infinite
+}
+
+.cf-r{
+  animation:receive-transfer 6.5s ease-in-out infinite
+}
+
+.cf-bar{
+  animation:open-valve 6.5s ease-in-out infinite
+}
+
+.cf-flow{
+  visibility:visible;
+  opacity:0;
+  animation:crossfeed-flow 6.5s linear infinite
+}
+
+@keyframes source-transfer{
+  0%,20%,88%,100%{
+  transform:translateY(0)
+}
+44%,62%{
+  transform:translateY(6px)
+}
+
+}
+
+@keyframes receive-transfer{
+  0%,20%,88%,100%{
+  transform:translateY(0)
+}
+44%,62%{
+  transform:translateY(-6px)
+}
+
+}
+
+@keyframes open-valve{
+  0%,10%,80%,100%{
+  transform:rotate(0deg)
+}
+18%,70%{
+  transform:rotate(90deg)
+}
+
+}
+
+@keyframes crossfeed-flow{
+  0%,18%,78%,100%{
+  opacity:0
+}
+24%,70%{
+  opacity:.85
+}
+18%{
+  stroke-dashoffset:1
+}
+72%{
+  stroke-dashoffset:-1
+}
+
+}
+
+@media(prefers-reduced-motion:reduce){
+  .cf-l,.cf-r,.cf-bar,.cf-flow{
+  animation:none
+}
+
+.cf-flow{
+  visibility:hidden
+}
+
+}</style><defs><clipPath id="cl-dark"><path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z"/></clipPath><clipPath id="cr-dark"><rect x="29.592" y="-24.008" width="8.415" height="22.823" rx="3.008"/></clipPath></defs><path d="M12.000 -7.0H29.0" stroke="#E9E6DF" stroke-width="1.185"/><path visibility="hidden" class="cf-flow" pathLength="1" stroke-dasharray="1 2" stroke-dashoffset="1" d="M12.000 -7.0H29.0" stroke="#C4552A" stroke-width="1.185"/><path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z" fill="#141311"/><rect x="29.0" y="-24.6" width="9.6" height="24.008" rx="3.6" fill="#141311"/><g clip-path="url(#cl-dark)"><g class="cf-l"><rect x="2.4" y="-18.4" width="9.6" height="40" fill="#301E15"/><path d="M2.4 -18.4H12.0" stroke="#C4552A" stroke-width="1.185"/></g></g><g clip-path="url(#cr-dark)"><g class="cf-r"><rect x="29.0" y="-4.4" width="9.6" height="40" fill="#301E15"/><path d="M29.0 -4.4H38.6" stroke="#C4552A" stroke-width="1.185"/></g></g><path d="M6 -24.6H8.4Q12 -24.6 12 -21V-4.192Q12 -0.592 8.4 -0.592H7.4L4.8 1.6V-0.592Q2.4 -0.592 2.4 -3V-21Q2.4 -24.6 6 -24.6Z" fill="none" stroke="#E9E6DF" stroke-width="1.185"/><rect x="29.0" y="-24.6" width="9.6" height="24.008" rx="3.6" fill="none" stroke="#E9E6DF" stroke-width="1.185"/><circle cx="20.5" cy="-7.0" r="3.292" fill="#141311" stroke="#E9E6DF" stroke-width="1.185"/><g transform="translate(20.500 -7.000)"><g class="cf-bar"><g transform="translate(-20.500 7.000)"><rect x="19.858" y="-9.800" width="1.285" height="5.6" rx="0.642" fill="#C4552A"/></g></g></g></svg>

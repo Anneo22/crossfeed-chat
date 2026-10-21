@@ -1,0 +1,26 @@
+{
+  "name": "crossfeed-chat",
+  "version": "0.2.0",
+  "description": "A small paired MCP gateway with fresh ChatGPT worker chats",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24.18.0"
+  },
+  "bin": {
+    "crossfeed-chat": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "node src/cli.ts serve",
+    "test": "node --test test/*.test.ts",
+    "test:tcp": "CROSSFEED_TEST_TCP=1 node --test test/http.test.ts test/tcp-boundary.test.ts",
+    "check": "node scripts/check.ts",
+    "typecheck": "tsc --noEmit",
+    "wake:check": "python3 -m tools.wake_checker",
+    "test:wake-checker": "python3 -B -m unittest discover -s tools/wake_checker/tests -p 'test_*.py'"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

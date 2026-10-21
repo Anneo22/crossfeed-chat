@@ -1,0 +1,34 @@
+# Optional per-user, desktop-session-scoped service. Do not install or enable without
+# separate host/operator approval and a prepared, paired, host-admitted profile.
+[Unit]
+Description=Crossfeed private headed automation browser (opt-in)
+Wants=crossfeed-chat.service
+After=crossfeed-chat.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+UMask=0077
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStartPre=/usr/bin/node %h/.local/share/crossfeed-chat/repo/scripts/automation-browser.ts recover --root %h/.local/share/crossfeed-chat/automation-browser
+ExecStart=/usr/bin/node %h/.local/share/crossfeed-chat/repo/scripts/automation-browser.ts run --root %h/.local/share/crossfeed-chat/automation-browser
+Restart=on-failure
+RestartSec=10
+# Signal only the supervisor initially: it stops owned Brave before owned Xvfb.
+# systemd's eventual kill covers only processes still in this unit's cgroup.
+# A manager-spawned Brave may be moved outside it by desktop session management;
+# manager death with such a live browser has NOT been recovery-tested. The
+# supervisor normally owns its child, but cgroup cleanup cannot cover a moved
+# PID; recovery fails closed on live/ambiguous ownership (no foreign adoption).
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+# Reduce chance of browser URL/auth material entering service logs. Unit metadata
+# may still appear in systemd journal; this is NOT a no-logging guarantee.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=graphical-session.target
