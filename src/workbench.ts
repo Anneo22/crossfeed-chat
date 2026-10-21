@@ -302,7 +302,7 @@ export class Workbench {
     }).join('');
     const profile = `(version 1)(deny default)
 (allow process-fork)(allow process-exec)(allow signal (target self))(allow sysctl-read)(allow file-read-metadata)
-(allow file-read* (literal "/") ${['/System','/usr','/bin','/sbin','/Library/Apple','/Library/Developer','/Library/Frameworks','/private/var/db/dyld','/opt/homebrew/Cellar','/opt/homebrew/opt','/opt/homebrew/lib',root.path].map(p=>`(subpath ${quote(p)})`).join(' ')} (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))
+(allow file-read* (literal "/") ${['/System','/usr','/bin','/sbin','/Library/Apple','/Library/Developer','/Library/Frameworks','/private/var/db/dyld','/opt/homebrew/Cellar','/opt/homebrew/opt','/opt/homebrew/lib',path.dirname(path.dirname(fs.realpathSync(process.execPath))),root.path].map(p=>`(subpath ${quote(p)})`).join(' ')} (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom"))
 (allow file-write* (subpath ${quote(root.path)}) (literal "/dev/null"))
 (deny file-read* file-write* (regex ${quote(casePattern)}))
 ${this.network ? '(allow network*)' : '(deny network*)'}`;
