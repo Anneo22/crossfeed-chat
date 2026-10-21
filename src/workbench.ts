@@ -258,12 +258,18 @@ export class Workbench {
     } finally { if (owned) { this.busy = false; if (!refused) this.audit({ ...call, state: 'finished' }); } }
   }
 
-  runner(timeout = 15000) {
+  // One-time setup, cached by digest: its budget is independent of any command's deadline
+  // (a 0.5 s command must not cut the compile short), and the binary appears atomically.
+  runner(timeout = 60000) {
     const destination = path.join(this.directory, `workbench-runner-${runnerDigest}`);
     if (!fs.existsSync(destination)) {
-      const result = spawnSync('/usr/bin/cc', ['-Wall','-Wextra','-Werror','-O2','-x','c','-','-o',destination], { input: runnerSource, timeout, maxBuffer: OUTPUT_BYTES, env: { PATH: '/usr/bin:/bin' } });
-      check(result.status === 0, 'Command supervisor unavailable; install macOS Command Line Tools', 503);
-      fs.chmodSync(destination,0o700);
+      const partial = `${destination}.${process.pid}.${randomUUID()}.partial`;
+      try {
+        const result = spawnSync('/usr/bin/cc', ['-Wall','-Wextra','-Werror','-O2','-x','c','-','-o',partial], { input: runnerSource, timeout, maxBuffer: OUTPUT_BYTES, env: { PATH: '/usr/bin:/bin' } });
+        check(result.status === 0, 'Command supervisor unavailable; install macOS Command Line Tools', 503);
+        fs.chmodSync(partial,0o700);
+        fs.renameSync(partial, destination);
+      } finally { fs.rmSync(partial, { force: true }); }
     }
     const stat = fs.lstatSync(destination);
     check(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && !(stat.mode & 0o077) && stat.uid === process.getuid!(), 'Unsafe command supervisor', 503);
@@ -383,7 +389,7 @@ ${this.network ? '(allow network*)' : '(deny network*)'}`;
     return new Promise<ExecutionResult>((resolve, reject) => {
       const deadline = Date.now() + timeout;
       check(!signal?.aborted && Date.now() < deadline, 'Command execution cancelled or timed out', 403, 'workbench_guard');
-      const runner = this.runner(Math.max(1, Math.min(15000, deadline - Date.now())));
+      const runner = this.runner();
       check(!signal?.aborted && Date.now() < deadline, 'Command execution cancelled or timed out', 403, 'workbench_guard');
       const child = spawn(runner, argv, { cwd, detached: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], env });
       child.once('spawn', () => onStart?.());
