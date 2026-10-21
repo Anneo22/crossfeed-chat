@@ -479,10 +479,28 @@ const levels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
  * @returns {() => Promise<void>}
  */
 export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
-  let running = false;
+  let running = false, generation = 0, watchdogAt = 0;
+  // A call into a busy or replaced ChatGPT page can stay pending forever; bound each one so a
+  // wake fails cleanly (and its finally closes the tab) instead of freezing the extension.
+  /** @type {(options: any, ms?: number) => Promise<any>} */
+  const pageScript = (options, ms = 20000) => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    return Promise.race([
+      browser.scripting.executeScript(options),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(Error('page_not_ready')), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  };
   return async function poll() {
-    if (running) return;
+    if (running) {
+      if (now() < watchdogAt) return;
+      // The previous wake outlived its deadline: close what it opened and take over.
+      try { await closeOrphanedWakeTabs(browser); } catch { /* best effort */ }
+      running = false;
+    }
     running = true;
+    const mine = ++generation;
+    watchdogAt = now() + 300000;
     // No wake is running in this poll yet: anything still recorded belongs to a
     // wake whose context died. Clean it before deciding what to do next.
     try { await closeOrphanedWakeTabs(browser); } catch { /* never block a wake on cleanup */ }
@@ -525,6 +543,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       if (!validTicket(ticket, now())) throw Error('invalid_ticket');
       // Stable aliases carry the successful validation into asynchronous page probes.
       const activeTicket = ticket;
+      watchdogAt = Math.max(watchdogAt, /** @type {any} */ (activeTicket).expires_at + 60000);
       /** @type {string | undefined} */
       let reportedChat;
       // Tell the service about the chat the moment its URL exists, so a crash, an extension reload or a
@@ -668,7 +687,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         const probeArgs = [pageTicket, true, remaining, 100];
         wakeDiagnostic = {checkpoint: 'probe_result', ...wakeSnapshot, probe: {executed: true, ready: false, phase: -1, documentIdPresent: false}};
         /** @type {import('./types.js').Injection<PrefillProbeResult>[]} */
-        const probeRuns = await browser.scripting.executeScript({target: {tabId: activeTab.id}, func: prefillProbe, args: probeArgs});
+        const probeRuns = await pageScript({target: {tabId: activeTab.id}, func: prefillProbe, args: probeArgs});
         const probe = probeRuns[0];
         const rawProbePhase = probe?.result?.phase;
         const probePhase = Number.isInteger(rawProbePhase) ? /** @type {number} */ (rawProbePhase) : -1;
@@ -699,7 +718,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           stage = 'picker';
           /** @type {[PageTicket, number, number]} */
           const modelArgs = [pageTicket, expectedMaximum, Math.max(1, Math.min(1500, activeTicket.expires_at - now()))];
-          const modelRuns = await browser.scripting.executeScript({
+          const modelRuns = await pageScript({
             target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args: modelArgs,
           });
           const model = modelRuns[0];
@@ -728,7 +747,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         /** @type {[PageTicket, number, number, number]} */
         const sendArgs = [pageTicket, Math.max(1, Math.min(15000, activeTicket.expires_at - now())), 100, nativePhase];
         /** @type {import('./types.js').Injection<PrefillWakeResult>[]} */
-        const wakeRuns = await browser.scripting.executeScript({
+        const wakeRuns = await pageScript({
           target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillWake, args: sendArgs,
         });
         const wake = wakeRuns[0];
@@ -764,7 +783,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           const registrationTarget = registrationDocumentId ?
             {tabId: activeTab.id, documentIds: [registrationDocumentId]} : {tabId: activeTab.id};
           /** @type {import('./types.js').Injection<PageProbe>[]} */
-          const registrationRuns = await browser.scripting.executeScript({
+          const registrationRuns = await pageScript({
             target: registrationTarget, func: pageWake, args: registrationArgs,
           });
           const value = registrationRuns[0];
@@ -780,7 +799,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
             /** @type {[PageTicket, string, string]} */
             const permissionArgs = [pageTicket, 'options', newURL];
             /** @type {import('./types.js').Injection<boolean>[]} */
-            const permissionRuns = await browser.scripting.executeScript({
+            const permissionRuns = await pageScript({
               target: {tabId: activeTab.id, documentIds: [boundDocumentId]}, func: pagePermission, args: permissionArgs,
             });
             const clicked = permissionRuns[0];
@@ -796,7 +815,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
             /** @type {[PageTicket, string, string]} */
             const permissionArgs = [pageTicket, option, newURL];
             /** @type {import('./types.js').Injection<boolean>[]} */
-            const permissionRuns = await browser.scripting.executeScript({
+            const permissionRuns = await pageScript({
               target: {tabId: activeTab.id, documentIds: [boundDocumentId]}, func: pagePermission, args: permissionArgs,
             });
             const clicked = permissionRuns[0];
@@ -836,7 +855,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           await pause(200); current = await browser.tabs.get(activeTab.id);
         }
         if (current.pendingUrl || current.url !== home && !(action === 'registration' && savedChatURL(current.url))) throw Error('page_changed');
-        const [value] = await browser.scripting.executeScript({target: {tabId: activeTab.id, ...(documentId && !registration ? {documentIds: [documentId]} : {})}, func: pageWake, args: [pageTicket, action]});
+        const [value] = await pageScript({target: {tabId: activeTab.id, ...(documentId && !registration ? {documentIds: [documentId]} : {})}, func: pageWake, args: [pageTicket, action]});
         if (!value?.result || typeof value.documentId !== 'string') throw Error('page_changed');
         if (documentId && value.documentId !== documentId && !(registration && savedChatURL(value.result.url))) throw Error('page_changed');
         documentId = value.documentId;
@@ -1068,7 +1087,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       } else if (native && typeof ownedWindowId === 'number' && Number.isSafeInteger(ownedWindowId) && ownedWindowId > 0) {
         try { await browser.windows.remove(ownedWindowId); await forgetOwnedWakeTab(browser, undefined, ownedWindowId); } catch { /* The next idle poll closes the recorded orphan tab. */ }
       }
-      running = false;
+      if (generation === mine) running = false;
     }
   };
 }

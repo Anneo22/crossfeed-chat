@@ -1469,3 +1469,16 @@ test('each wake records its tab (and native window) at creation and releases it 
     assert.equal(f.events.some((e: any) => e.remove === 7), true);
   }
 });
+
+test('a page call that never answers after send fails the wake and closes its tab instead of freezing the extension', {timeout: 60000}, async () => {
+  const f = workerFixture({wakeMode: 'configured'}), execute = f.browser.scripting.executeScript;
+  f.browser.scripting.executeScript = async (opts: any) => {
+    if (opts.args?.[1] === 'registration') return new Promise(() => {}) as any;
+    return execute(opts);
+  };
+  await run(f);
+  const result = f.events.find((e: any) => e.path === '/extension/result');
+  assert.equal(result.body.ok, false);
+  assert.equal(result.body.error, 'page_not_ready');
+  assert.equal(f.events.some((e: any) => e.remove === 7), true);
+});
