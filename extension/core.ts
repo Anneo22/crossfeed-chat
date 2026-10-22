@@ -1,28 +1,23 @@
-import { pageWake, prefillProbe, prefillModel, prefillWake, pagePermission } from './page.js';
-import { ensurePairing } from './pairing.js';
+import { pageWake, prefillProbe, prefillModel, prefillWake, pagePermission } from './page.ts';
+import { ensurePairing } from './pairing.ts';
+import type {
+  APIConfig, APIReply, DebugReply, Fetcher, Injection, OwnedWakeTab, PageAction,
+  PageProbe, PageTicket, PollBrowser, PrefillModelResult, PrefillProbeResult,
+  PrefillWakeResult, Tab, Ticket,
+} from './types.d.ts';
 
-/** @typedef {import('./types.js').Ticket} Ticket */
-/** @typedef {import('./types.js').PageTicket} PageTicket */
-/** @typedef {import('./types.js').PageProbe} PageProbe */
-/** @typedef {import('./types.js').PageAction} PageAction */
-/** @typedef {import('./types.js').PrefillProbeResult} PrefillProbeResult */
-/** @typedef {import('./types.js').PrefillWakeResult} PrefillWakeResult */
-
-/** @param {unknown} value @returns {string | null} */
-export function savedChatURL(value) {
+export function savedChatURL(value: unknown): string | null {
   if (typeof value !== 'string' || !/^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]{1,128}$/.test(value)) return null;
   try { return new URL(value).href === value ? value : null; } catch { return null; }
 }
 
 // ChatGPT briefly uses a local conversation ID before the saved chat exists.
 // This is a wait-only route after Enter, never an input target or saved URL.
-/** @param {unknown} value @returns {boolean} */
-function pendingChatURL(value) {
+function pendingChatURL(value: unknown): boolean {
   return typeof value === 'string' && /^https:\/\/chatgpt\.com\/c\/local-chatgpt%3[Aa][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value);
 }
 
-/** @param {unknown} value @param {string} prompt @returns {-1 | 0 | 1 | 2} */
-function ordinaryWakePhase(value, prompt) {
+function ordinaryWakePhase(value: unknown, prompt: string): -1 | 0 | 1 | 2 {
   if (typeof value !== 'string') return -1;
   const home = 'https://chatgpt.com/';
   // Keep authority/path serialization exact while allowing equivalent
@@ -46,11 +41,9 @@ const wakeDiagnosticStatuses = new Set(['complete', 'loading', 'missing', 'other
 const wakeDiagnosticURIClasses = new Set(['missing', 'blank', 'native_q', 'native_prompt', 'root', 'root_other_query', 'login', 'conversation', 'foreign', 'other']);
 const wakeDiagnosticQueryNames = new Set(['q', 'prompt', 'model', 'temporary-chat', 'hints', 'ref', 'utm_source', 'utm_campaign', 'other']);
 
-/** @param {unknown} value @param {string} prompt */
-function wakeURLDiagnostic(value, prompt) {
+function wakeURLDiagnostic(value: unknown, prompt: string) {
   let uriClass = 'missing', parsedPhase = -1, queryCount = 0;
-  /** @type {string[]} */
-  let queryNames = [];
+  let queryNames: string[] = [];
   let qMatches = false, promptMatches = false;
   if (value == null) return {uri_class: uriClass, parsed_phase: parsedPhase, query_count: queryCount, query_names: queryNames, q_matches: qMatches, prompt_matches: promptMatches};
   if (value === '' || value === 'about:blank') {
@@ -85,8 +78,7 @@ function wakeURLDiagnostic(value, prompt) {
   return {uri_class: uriClass, parsed_phase: parsedPhase, query_count: queryCount, query_names: queryNames, q_matches: qMatches, prompt_matches: promptMatches};
 }
 
-/** @param {import('./types.js').Tab | undefined} tab @param {string} prompt */
-function wakeTabDiagnostic(tab, prompt) {
+function wakeTabDiagnostic(tab: Tab | undefined, prompt: string) {
   const status = tab?.status == null ? 'missing' : wakeDiagnosticStatuses.has(tab.status) ? tab.status : 'other';
   return {
     status,
@@ -96,9 +88,8 @@ function wakeTabDiagnostic(tab, prompt) {
   };
 }
 
-/** @param {unknown} value */
-function safeWakeURLDiagnostic(value) {
-  const input = value && typeof value === 'object' ? /** @type {Record<string, unknown>} */ (value) : {};
+function safeWakeURLDiagnostic(value: unknown) {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const uriClass = typeof input.uri_class === 'string' && wakeDiagnosticURIClasses.has(input.uri_class) ? input.uri_class : 'other';
   const phase = Number(input.parsed_phase);
   const parsedPhase = Number.isInteger(phase) && phase >= -1 && phase <= 2 ? phase : -1;
@@ -112,12 +103,11 @@ function safeWakeURLDiagnostic(value) {
   };
 }
 
-/** @param {unknown} candidate @param {string} failureCode @param {number} timestamp */
-function safeWakeDiagnostic(candidate, failureCode, timestamp) {
-  const input = candidate && typeof candidate === 'object' ? /** @type {Record<string, unknown>} */ (candidate) : {};
+function safeWakeDiagnostic(candidate: unknown, failureCode: string, timestamp: number) {
+  const input = candidate && typeof candidate === 'object' ? candidate as Record<string, unknown> : {};
   if (typeof input.checkpoint !== 'string' || !wakeDiagnosticCheckpoints.has(input.checkpoint)) return null;
   const status = typeof input.status === 'string' && wakeDiagnosticStatuses.has(input.status) ? input.status : 'other';
-  const probeInput = input.probe && typeof input.probe === 'object' ? /** @type {Record<string, unknown>} */ (input.probe) : {};
+  const probeInput = input.probe && typeof input.probe === 'object' ? input.probe as Record<string, unknown> : {};
   const probePhaseRaw = Number(probeInput.phase);
   const probePhase = Number.isInteger(probePhaseRaw) && probePhaseRaw >= -1 && probePhaseRaw <= 2 ? probePhaseRaw : -1;
   const output = {
@@ -142,40 +132,36 @@ function safeWakeDiagnostic(candidate, failureCode, timestamp) {
   return output;
 }
 
-/** @param {import('./types.js').PollBrowser} browser @param {unknown} candidate @param {string} failureCode @param {number} timestamp */
-async function persistWakeDiagnostic(browser, candidate, failureCode, timestamp) {
+async function persistWakeDiagnostic(browser: PollBrowser, candidate: unknown, failureCode: string, timestamp: number): Promise<void> {
   const diagnostic = safeWakeDiagnostic(candidate, failureCode, timestamp);
-  const set = browser.storage?.local?.set;
-  if (!diagnostic || typeof set !== 'function') return;
+  const storage = browser.storage?.local;
+  if (!diagnostic || typeof storage?.set !== 'function') return;
   try {
-    await set.call(browser.storage.local, {crossfeedWakeDiagnostic: 'CFWAKE_DIAG_V1' + JSON.stringify(diagnostic)});
+    await storage.set.call(storage, {crossfeedWakeDiagnostic: 'CFWAKE_DIAG_V1' + JSON.stringify(diagnostic)});
   } catch { /* Best-effort diagnostics never affect wake failure handling. */ }
 }
 
-/** @param {unknown} value @returns {string | null} */
-export function apiURL(value) {
+export function apiURL(value: unknown): string | null {
   if (typeof value !== 'string' || !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(value)) return null;
   try { return new URL(value).origin === value ? value : null; } catch { return null; }
 }
 
-/** @param {unknown} input @param {number} [now] @returns {input is Ticket} */
-export function validTicket(input, now = Date.now()) {
+export function validTicket(input: unknown, now = Date.now()): input is Ticket {
   // Interpret untrusted JSON only inside the validator; every ticket field is checked below.
-  const ticket = /** @type {Ticket | null | undefined} */ (input);
-  /** @param {unknown} value @param {number} limit @returns {value is string} */
-  const line = (value, limit) => typeof value === 'string' && value.length > 0 &&
+  const ticket = input as any;
+  const line = (value: unknown, limit: number): value is string => typeof value === 'string' && value.length > 0 &&
     new TextEncoder().encode(value).length <= limit && value.trim() === value && !/\p{C}/u.test(value);
   const composer = ticket?.type === 'composer';
   const attachments = ticket?.attachments;
   const validFiles = Array.isArray(attachments) && attachments.length > 0 && attachments.length <= 10 &&
     attachments.every(file => file && line(file.name, 255) && !/[\\/]/.test(file.name) && !['.', '..'].includes(file.name) &&
       typeof file.path === 'string' && file.path.startsWith('/') && !/[\\]/.test(file.path) && !/\p{C}/u.test(file.path) &&
-      !file.path.split('/').some(part => part === '.' || part === '..') && !file.path.includes('//') &&
+      !file.path.split('/').some((part: string) => part === '.' || part === '..') && !file.path.includes('//') &&
       file.path.split('/').at(-1) === file.name && file.path.length <= 4096 &&
       line(file.mime, 128) && Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= 20 * 1024 * 1024) &&
-    new Set(attachments.map(file => file.path)).size === attachments.length &&
-    new Set(attachments.map(file => file.name)).size === attachments.length &&
-    attachments.reduce((sum, file) => sum + file.bytes, 0) <= 50 * 1024 * 1024;
+    new Set(attachments.map((file: any) => file.path)).size === attachments.length &&
+    new Set(attachments.map((file: any) => file.name)).size === attachments.length &&
+    attachments.reduce((sum: number, file: any) => sum + file.bytes, 0) <= 50 * 1024 * 1024;
   const validTitle = ticket?.title === undefined || typeof ticket.title === 'string' &&
     Array.from(ticket.title).length <= 80 && new TextEncoder().encode(ticket.title).length <= 320 &&
     ticket.title === ticket.title.trim() && !/\p{C}/u.test(ticket.title);
@@ -188,21 +174,15 @@ export function validTicket(input, now = Date.now()) {
 
 /**
  * The signed-in ChatGPT bearer token, read from the trusted extension service worker.
- * @param {AbortSignal} signal
- * @returns {Promise<string | null>}
  */
-async function chatgptToken(signal) {
+async function chatgptToken(signal: AbortSignal): Promise<string | null> {
   const session = await fetch('https://chatgpt.com/api/auth/session', {credentials: 'include', redirect: 'error', cache: 'no-store', signal});
   if (!session.ok) return null;
-  const token = (/** @type {{accessToken?: unknown}} */ (await session.json())).accessToken;
+  const token = ((await session.json()) as {accessToken?: unknown}).accessToken;
   return typeof token === 'string' && token ? token : null;
 }
 
-/**
- * @param {string} token @param {string} id @param {boolean} remove @param {AbortSignal} signal
- * @returns {Promise<boolean>}
- */
-async function disposeConversation(token, id, remove, signal) {
+async function disposeConversation(token: string, id: string, remove: boolean, signal: AbortSignal): Promise<boolean> {
   const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {
     credentials: 'include', redirect: 'error', cache: 'no-store', signal, method: 'PATCH',
     headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
@@ -214,15 +194,14 @@ async function disposeConversation(token, id, remove, signal) {
 
 /**
  * Run ChatGPT's archive request from the trusted extension service worker.
- * @param {string} url @param {number} [timeoutMs] @param {boolean} [remove]
  */
-export async function archiveConversation(url, timeoutMs = 15000, remove = false) {
+export async function archiveConversation(url: string, timeoutMs = 15000, remove = false): Promise<boolean> {
   if (!savedChatURL(url)) return false;
   try {
     const signal = AbortSignal.timeout(timeoutMs);
     const token = await chatgptToken(signal);
     if (!token) return false;
-    return await disposeConversation(token, /** @type {string} */ (new URL(url).pathname.split('/').at(-1)), remove, signal);
+    return await disposeConversation(token, new URL(url).pathname.split('/').at(-1) as string, remove, signal);
   } catch { return false; }
 }
 
@@ -230,22 +209,19 @@ export async function archiveConversation(url, timeoutMs = 15000, remove = false
 // fixed phrases (configured wake, native wake, composer job). Nothing else is ever swept.
 const chip = String.raw`(?:\[\$?[^\]\n]{1,80}\]\(app:\/\/[^)\s]{1,200}\)|[@$][A-Za-z0-9_.-]{1,80})`;
 const wakeSignature = new RegExp(String.raw`^\s*${chip}\s+(?:wake up as [^\s]{1,160}\s*$|wake up\. First gateway_exchange: worker_label=|process exactly job [A-Za-z0-9_-]{1,64} as [^\n]{1,200}?\. Call gateway_exchange with worker_label=)`);
-/** @param {unknown} text @returns {boolean} */
-export function isWakeSignature(text) { return typeof text === 'string' && text.length <= 4000 && wakeSignature.test(text); }
+export function isWakeSignature(text: unknown): boolean { return typeof text === 'string' && text.length <= 4000 && wakeSignature.test(text); }
 
 /**
  * The first user message of a ChatGPT conversation payload, or '' when the shape is not understood.
- * @param {any} conversation @returns {string}
  */
-export function firstUserText(conversation) {
+export function firstUserText(conversation: any): string {
   const mapping = conversation?.mapping;
   if (!mapping || typeof mapping !== 'object') return '';
-  /** @type {any[]} */
-  let chain = [];
+  let chain: any[] = [];
   const seen = new Set();
   for (let id = conversation.current_node; typeof id === 'string' && mapping[id] && !seen.has(id) && chain.length < 5000; id = mapping[id].parent) { seen.add(id); chain.push(mapping[id]); }
   chain.reverse();
-  if (!chain.length) chain = Object.values(mapping).sort((a, b) => (a?.message?.create_time ?? 0) - (b?.message?.create_time ?? 0));
+  if (!chain.length) chain = Object.values(mapping).sort((a: any, b: any) => (a?.message?.create_time ?? 0) - (b?.message?.create_time ?? 0));
   for (const node of chain) {
     const message = node?.message;
     if (message?.author?.role !== 'user') continue;
@@ -255,8 +231,7 @@ export function firstUserText(conversation) {
   return '';
 }
 
-/** @param {unknown} value @returns {number | null} */
-function createdAt(value) {
+function createdAt(value: unknown): number | null {
   const ms = typeof value === 'string' ? Date.parse(value) : typeof value === 'number' ? value * 1000 : NaN;
   return Number.isFinite(ms) ? ms : null;
 }
@@ -266,23 +241,17 @@ const sweepEveryMs = 600000, sweepMinAgeMs = 600000, sweepChecked = 500, sweepPe
  * Delete wake chats nobody recorded or released (extension reloaded mid-wake, service state lost). A conversation is
  * touched only if the service says no ticket, label, session or queue entry holds it AND its first message is a wake
  * message. Every other conversation of the owner is only listed, never changed.
- * @param {import('./types.js').APIConfig} config
- * @param {import('./types.js').PollBrowser} browser
- * @param {import('./types.js').Fetcher} fetcher
- * @param {() => number} now
  */
-export async function sweepWakeChats(config, browser, fetcher = fetch, now = Date.now) {
-  const store = /** @type {any} */ (browser.storage?.local);
+export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fetcher: Fetcher = fetch, now: () => number = Date.now): Promise<void> {
+  const store = browser.storage?.local as any;
   if (typeof store?.get !== 'function' || typeof store?.set !== 'function') return;
   const previous = ((await store.get(['crossfeedSweep'])) ?? {}).crossfeedSweep ?? {};
   if (typeof previous.at === 'number' && now() - previous.at < sweepEveryMs) return;
-  /** @type {Set<string>} */
-  const checked = new Set(Array.isArray(previous.checked) ? previous.checked.filter((/** @type {unknown} */ id) => typeof id === 'string') : []);
+  const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string') : []);
   const report = {at: now(), listed: 0, candidates: 0, approved: 0, deleted: 0, error: ''};
   // Record the attempt first: a failing sweep must not run on every 30-second poll.
   await store.set({crossfeedSweep: {...report, checked: [...checked]}});
-  /** @type {string[]} */
-  const deleted = [];
+  const deleted: string[] = [];
   let sweepApproved = false;
   try {
     const signal = AbortSignal.timeout(20000);
@@ -294,15 +263,15 @@ export async function sweepWakeChats(config, browser, fetcher = fetch, now = Dat
     const items = (await listing.json())?.items;
     if (!Array.isArray(items)) throw Error('list_shape');
     report.listed = items.length;
-    const candidates = items.flatMap((/** @type {any} */ item) => {
+    const candidates = items.flatMap((item: any) => {
       const created = createdAt(item?.create_time);
       return typeof item?.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item.id) && created !== null && now() - created >= sweepMinAgeMs && !checked.has(item.id) ? [{id: item.id, created_at: created}] : [];
     });
     report.candidates = candidates.length;
     if (candidates.length) {
-      const { dispose } = /** @type {{dispose?: string[]}} */ (await request(config, '/extension/sweep', {candidates}, fetcher));
+      const { dispose } = await request(config, '/extension/sweep', {candidates}, fetcher) as {dispose?: string[]};
       sweepApproved = true;
-      const approved = Array.isArray(dispose) ? dispose.filter(id => candidates.some(c => c.id === id)).slice(0, sweepPerRun) : [];
+      const approved = Array.isArray(dispose) ? dispose.filter(id => candidates.some((c: {id: string}) => c.id === id)).slice(0, sweepPerRun) : [];
       report.approved = approved.length;
       for (const id of approved) {
         const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
@@ -311,7 +280,7 @@ export async function sweepWakeChats(config, browser, fetcher = fetch, now = Dat
         if (await disposeConversation(token, id, true, signal)) deleted.push(id);
       }
     }
-  } catch (error) { report.error = String(/** @type {Error} */ (error)?.message ?? error).slice(0, 40); }
+  } catch (error) { report.error = String((error as Error)?.message ?? error).slice(0, 40); }
   report.deleted = deleted.length;
   try { if (sweepApproved) await request(config, '/extension/sweep/done', {deleted}, fetcher); } catch { /* the bounded receiver lease expires if reporting fails */ }
   await store.set({crossfeedSweep: {...report, checked: [...checked].slice(-sweepChecked)}});
@@ -319,8 +288,7 @@ export async function sweepWakeChats(config, browser, fetcher = fetch, now = Dat
 
 // Cosmetic and best-effort: a missing tabGroups permission (granted only by a full Chrome reload
 // of the extension) or a failed group call must never fail the job itself.
-/** @param {import('./types.js').PollBrowser} browser @param {import('./types.js').Tab} tab @param {Ticket} ticket */
-async function groupWorkerTab(browser, tab, ticket) {
+async function groupWorkerTab(browser: PollBrowser, tab: Tab, ticket: Ticket): Promise<void> {
   try {
     if (!browser.tabGroups?.update || !browser.tabs?.group) return;
     const group = await browser.tabs.group({tabIds: [tab.id]});
@@ -332,21 +300,20 @@ async function groupWorkerTab(browser, tab, ticket) {
 // A record is a claim on that tab, not on the window: closing it must never
 // close tabs the owner later added to the same window.
 const ownedWakeTabsKey = 'crossfeedWakeTabs';
-/** @typedef {{tab: number, window?: number, at: number}} OwnedWakeTab */
 
-/** @param {unknown} value @returns {OwnedWakeTab | null} */
-function ownedWakeTab(value) {
+function ownedWakeTab(value: unknown): OwnedWakeTab | null {
   if (!value || typeof value !== 'object') return null;
-  const record = /** @type {Record<string, unknown>} */ (value);
-  if (!Number.isSafeInteger(record.tab) || /** @type {number} */ (record.tab) <= 0) return null;
-  const tab = /** @type {number} */ (record.tab);
-  const window = Number.isSafeInteger(record.window) && /** @type {number} */ (record.window) > 0 ? /** @type {number} */ (record.window) : undefined;
+  const record = value as Record<string, unknown>;
+  const rawTab = record.tab;
+  if (typeof rawTab !== 'number' || !Number.isSafeInteger(rawTab) || rawTab <= 0) return null;
+  const tab = rawTab;
+  const rawWindow = record.window;
+  const window = typeof rawWindow === 'number' && Number.isSafeInteger(rawWindow) && rawWindow > 0 ? rawWindow : undefined;
   const at = typeof record.at === 'number' && Number.isFinite(record.at) ? record.at : 0;
   return {tab, ...(window === undefined ? {} : {window}), at};
 }
 
-/** @param {unknown} value */
-function chatGPTURL(value) {
+function chatGPTURL(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   try {
     const url = new URL(value);
@@ -354,15 +321,13 @@ function chatGPTURL(value) {
   } catch { return false; }
 }
 
-/** @param {import('./types.js').PollBrowser} browser @returns {Promise<OwnedWakeTab[]>} */
-async function ownedWakeTabs(browser) {
-  const store = browser.storage?.local;
+async function ownedWakeTabs(browser: PollBrowser): Promise<OwnedWakeTab[]> {
+  const store = browser.storage?.local as any;
   if (typeof store?.get !== 'function') return [];
   try {
     const value = (await store.get([ownedWakeTabsKey]))?.[ownedWakeTabsKey];
     if (!Array.isArray(value)) return [];
-    /** @type {OwnedWakeTab[]} */
-    const records = [];
+    const records: OwnedWakeTab[] = [];
     for (const candidate of value) {
       const record = ownedWakeTab(candidate);
       if (record) records.push(record);
@@ -371,23 +336,20 @@ async function ownedWakeTabs(browser) {
   } catch { return []; }
 }
 
-/** @param {import('./types.js').PollBrowser} browser @param {OwnedWakeTab[]} records */
-async function storeOwnedWakeTabs(browser, records) {
-  const store = browser.storage?.local;
+async function storeOwnedWakeTabs(browser: PollBrowser, records: OwnedWakeTab[]): Promise<void> {
+  const store = browser.storage?.local as any;
   if (typeof store?.set !== 'function') return;
   try { await store.set({[ownedWakeTabsKey]: records}); } catch { /* cleanup is best-effort, like diagnostics */ }
 }
 
-/** @param {import('./types.js').PollBrowser} browser @param {number} tab @param {number | undefined} window @param {number} at */
-async function rememberOwnedWakeTab(browser, tab, window, at) {
+async function rememberOwnedWakeTab(browser: PollBrowser, tab: number, window: number | undefined, at: number): Promise<void> {
   if (!Number.isSafeInteger(tab) || tab <= 0) return;
   const records = await ownedWakeTabs(browser);
-  records.push({tab, ...(Number.isSafeInteger(window) && /** @type {number} */ (window) > 0 ? {window: /** @type {number} */ (window)} : {}), at});
+  records.push({tab, ...(Number.isSafeInteger(window) && (window as number) > 0 ? {window: window as number} : {}), at});
   await storeOwnedWakeTabs(browser, records);
 }
 
-/** @param {import('./types.js').PollBrowser} browser @param {number | undefined} tab @param {number | undefined} window */
-async function forgetOwnedWakeTab(browser, tab, window) {
+async function forgetOwnedWakeTab(browser: PollBrowser, tab: number | undefined, window: number | undefined): Promise<void> {
   const records = await ownedWakeTabs(browser);
   if (!records.length) return;
   const kept = records.filter(record => record.tab !== tab && (window === undefined || record.window !== window));
@@ -399,20 +361,16 @@ async function forgetOwnedWakeTab(browser, tab, window) {
  * closed only if it still exists, is not the wake currently running, is still on
  * chatgpt.com, and (for a recorded native window) still belongs to that window.
  * Records for gone, moved or owner-repurposed tabs are dropped without closing.
- * @param {import('./types.js').PollBrowser} browser
- * @param {number} [runningTab]
  */
-export async function closeOrphanedWakeTabs(browser, runningTab) {
+export async function closeOrphanedWakeTabs(browser: PollBrowser, runningTab?: number): Promise<void> {
   const store = browser.storage?.local;
   if (typeof store?.get !== 'function' || typeof store?.set !== 'function') return;
   const records = await ownedWakeTabs(browser);
   if (!records.length) return;
-  /** @type {OwnedWakeTab[]} */
-  const kept = [];
+  const kept: OwnedWakeTab[] = [];
   for (const record of records) {
     if (record.tab === runningTab) { kept.push(record); continue; }
-    /** @type {import('./types.js').Tab | undefined} */
-    let tab;
+    let tab: Tab | undefined;
     try { tab = await browser.tabs.get(record.tab); } catch { continue; }
     if (!tab || tab.id !== record.tab) continue;
     if (!chatGPTURL(tab.url) || record.window !== undefined && tab.windowId !== record.window) continue;
@@ -425,31 +383,22 @@ export async function closeOrphanedWakeTabs(browser, runningTab) {
  * Chrome reuses tab ids after a restart, so startup must forget old records
  * without touching any tab. A record left by an extension reload (same browser
  * session) is still valid and is cleaned by the next poll instead.
- * @param {import('./types.js').PollBrowser} browser
  */
-export async function clearOwnedWakeTabs(browser) {
+export async function clearOwnedWakeTabs(browser: PollBrowser): Promise<void> {
   await storeOwnedWakeTabs(browser, []);
 }
 
 const reasons = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mode_unconfirmed',
   'level_unconfirmed', 'permission_unconfirmed', 'upload_unconfirmed', 'upload_failed', 'composer_not_empty', 'mention_unconfirmed', 'send_unconfirmed', 'claim_refused', 'expired', 'browser_error', 'rate_limited']);
 
-/**
- * @param {import('./types.js').APIConfig} config
- * @param {string} path
- * @param {unknown} body
- * @param {import('./types.js').Fetcher} [fetcher]
- * @returns {Promise<import('./types.js').APIReply>}
- */
-export async function request(config, path, body, fetcher = fetch) {
+export async function request(config: APIConfig, path: string, body: unknown, fetcher: Fetcher = fetch): Promise<APIReply> {
   if (!apiURL(config.apiURL) || typeof config.key !== 'string' || !config.key || /[\r\n]/.test(config.key) ||
     !['/extension/next', '/extension/claim', '/extension/observe', '/extension/result', '/extension/check', '/extension/archive/next', '/extension/archive/result', '/extension/chat', '/extension/sweep', '/extension/sweep/done'].includes(path)) throw Error('invalid_config');
   // Host-permitted extension GETs can omit Origin, which the paired API requires.
   // Use an empty POST for queue reads so Chrome supplies the extension Origin.
   const input = body ?? {};
   const controller = new AbortController();
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
-  let timer;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       (async () => {
@@ -462,36 +411,27 @@ export async function request(config, path, body, fetcher = fetch) {
         if (!response.ok) throw Error('request_refused');
         const raw = await response.text();
         if (raw.length > 16_384) throw Error('response_too_large');
-        return /** @type {import('./types.js').APIReply} */ (JSON.parse(raw));
+        return JSON.parse(raw) as APIReply;
       })(),
-      new Promise(/** @param {(value: import('./types.js').APIReply) => void} _ */ (_, reject) => { timer = setTimeout(() => { controller.abort(); reject(Error('request_timeout')); }, 4000); }),
+      new Promise<APIReply>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(Error('request_timeout')); }, 4000); }),
     ]);
   } finally { clearTimeout(timer); controller.abort(); }
 }
 
 
 const levels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
-/**
- * @param {import('./types.js').PollBrowser} browser
- * @param {import('./types.js').Fetcher} [fetcher]
- * @param {() => number} [now]
- * @param {(ms: number) => Promise<unknown>} [pause]
- * @returns {() => Promise<void>}
- */
-export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: () => number = Date.now, pause: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))): () => Promise<void> {
   let running = false, generation = 0, watchdogAt = 0;
   // A call into a busy or replaced ChatGPT page can stay pending forever; bound each one so a
   // wake fails cleanly (and its finally closes the tab) instead of freezing the extension.
-  /** @type {(options: any, ms?: number) => Promise<any>} */
-  const pageScript = (options, ms = 20000) => {
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let timer;
+  const pageScript = (options: any, ms = 20000): Promise<any> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([
       browser.scripting.executeScript(options),
       new Promise((_, reject) => { timer = setTimeout(() => reject(Error('page_not_ready')), ms); }),
     ]).finally(() => clearTimeout(timer));
   };
-  return async function poll() {
+  return async function poll(): Promise<void> {
     if (running) {
       if (now() < watchdogAt) return;
       // The previous wake outlived its deadline: close what it opened and take over.
@@ -504,27 +444,17 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
     // No wake is running in this poll yet: anything still recorded belongs to a
     // wake whose context died. Clean it before deciding what to do next.
     try { await closeOrphanedWakeTabs(browser); } catch { /* never block a wake on cleanup */ }
-    /** @type {unknown} */
-    let ticket;
-    /** @type {import('./types.js').APIConfig | null | undefined} */
-    let config;
-    /** @type {import('./types.js').Tab | undefined} */
-    let tab;
-    /** @type {string | undefined} */
-    let documentId;
-    /** @type {string | undefined} */
-    let newURL;
-    /** @type {string | undefined} */
-    let wakePrompt;
+    let ticket: unknown;
+    let config: APIConfig | null | undefined;
+    let tab: Tab | undefined;
+    let documentId: string | undefined;
+    let newURL: string | undefined;
+    let wakePrompt: string | undefined;
     let attached = false, sent = false, ordinary = false, native = false;
-    /** @type {number | undefined} */
-    let ownedWindowId;
-    /** @type {unknown} */
-    let wakeDiagnostic;
-    /** @type {import('./types.js').PageTicket | undefined} */
-    let draftTicket;
-    /** @type {{connector: string, option: string}[]} */
-    const permissions = [];
+    let ownedWindowId: number | undefined;
+    let wakeDiagnostic: unknown;
+    let draftTicket: PageTicket | undefined;
+    const permissions: {connector: string, option: string}[] = [];
     let stage = 'loading';
     const home = 'https://chatgpt.com/';
     try {
@@ -543,15 +473,13 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       if (!validTicket(ticket, now())) throw Error('invalid_ticket');
       // Stable aliases carry the successful validation into asynchronous page probes.
       const activeTicket = ticket;
-      watchdogAt = Math.max(watchdogAt, /** @type {any} */ (activeTicket).expires_at + 60000);
-      /** @type {string | undefined} */
-      let reportedChat;
+      watchdogAt = Math.max(watchdogAt, (activeTicket as any).expires_at + 60000);
+      let reportedChat: string | undefined;
       // Tell the service about the chat the moment its URL exists, so a crash, an extension reload or a
       // service restart before the final result can never leave an unrecorded conversation behind.
-      /** @param {string} url */
-      const reportChat = async url => {
+      const reportChat = async (url: string): Promise<void> => {
         if (reportedChat === url) return;
-        try { await request(/** @type {import('./types.js').APIConfig} */ (config), '/extension/chat', {nonce: activeTicket.nonce, url}, fetcher); reportedChat = url; }
+        try { await request(pairedConfig, '/extension/chat', {nonce: activeTicket.nonce, url}, fetcher); reportedChat = url; }
         catch { /* the final result and the periodic sweep still cover this chat */ }
       };
       stage = 'claim';
@@ -609,19 +537,18 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         await groupWorkerTab(browser, tab, activeTicket);
         if (ordinary) {
           const current = await browser.tabs.get(tab.id);
-          if (current.id !== tab.id || !Number.isSafeInteger(current.windowId) || /** @type {number} */ (current.windowId) <= 0) throw Error('page_changed');
+          if (current.id !== tab.id || !Number.isSafeInteger(current.windowId) || (current.windowId as number) <= 0) throw Error('page_changed');
           ownedWindowId = current.windowId;
         }
       }
       if (!tab || !Number.isSafeInteger(tab.id) || tab.id <= 0) throw Error('browser_error');
       const activeTab = tab;
       // Disk paths remain in the trusted extension, the page gets only upload metadata.
-      const pageTicket = /** @type {import('./types.js').PageTicket} */ ({...activeTicket, ...(activeTicket.attachments ? {attachments: activeTicket.attachments.map(({name, mime, bytes}) => ({name, mime, bytes}))} : {})});
+      const pageTicket = ({...activeTicket, ...(activeTicket.attachments ? {attachments: activeTicket.attachments.map(({name, mime, bytes}) => ({name, mime, bytes}))} : {})}) as PageTicket;
 
-      /** @param {number} [expectedMaximum] */
-      const performPrefilledWake = async expectedMaximum => {
+      const performPrefilledWake = async (expectedMaximum?: number): Promise<void> => {
         const config = pairedConfig;
-        const getOwnedTab = async () => {
+        const getOwnedTab = async (): Promise<Tab> => {
           const current = await browser.tabs.get(activeTab.id);
           if (current?.id !== activeTab.id || current.windowId !== ownedWindowId) {
             throw Error('page_changed');
@@ -650,8 +577,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         // is host authority. Wait for only its monotonic native root sequence.
         stage = 'loading';
         const navigationDeadline = Math.min(activeTicket.expires_at, now() + 15000);
-        /** @type {-1 | 0 | 1 | 2} */
-        let nativePhase = -1;
+        let nativePhase: -1 | 0 | 1 | 2 = -1;
         let ready = false;
         let wakeSnapshot = wakeTabDiagnostic(activeTab, prompt);
         wakeDiagnostic = {checkpoint: 'tab_wait', ...wakeSnapshot, probe: {executed: false, ready: false, phase: -1, documentIdPresent: false}};
@@ -683,14 +609,12 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         if (!ready || nativePhase < 0) throw Error('page_not_ready');
 
         const remaining = Math.max(1, Math.min(15000, activeTicket.expires_at - now()));
-        /** @type {[PageTicket, boolean, number, number]} */
-        const probeArgs = [pageTicket, true, remaining, 100];
+        const probeArgs: [PageTicket, boolean, number, number] = [pageTicket, true, remaining, 100];
         wakeDiagnostic = {checkpoint: 'probe_result', ...wakeSnapshot, probe: {executed: true, ready: false, phase: -1, documentIdPresent: false}};
-        /** @type {import('./types.js').Injection<PrefillProbeResult>[]} */
-        const probeRuns = await pageScript({target: {tabId: activeTab.id}, func: prefillProbe, args: probeArgs});
+        const probeRuns: Injection<PrefillProbeResult>[] = await pageScript({target: {tabId: activeTab.id}, func: prefillProbe, args: probeArgs});
         const probe = probeRuns[0];
         const rawProbePhase = probe?.result?.phase;
-        const probePhase = Number.isInteger(rawProbePhase) ? /** @type {number} */ (rawProbePhase) : -1;
+        const probePhase = Number.isInteger(rawProbePhase) ? rawProbePhase as number : -1;
         const probeState = {
           executed: true,
           ready: probe?.result?.ready === true,
@@ -709,16 +633,15 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           checkpoint: 'probe_binding', ...wakeSnapshot, probe: probeState,
           ...(probe.result.diagnostic && typeof probe.result.diagnostic === 'object' ? {probe_location: probe.result.diagnostic} : {}),
         };
-        if (typeof probe.documentId !== 'string' || /** @type {number} */ (probe.result.phase) < nativePhase) throw Error('page_changed');
+        if (typeof probe.documentId !== 'string' || (probe.result.phase as number) < nativePhase) throw Error('page_changed');
         documentId = probe.documentId;
-        nativePhase = /** @type {0 | 1 | 2} */ (probe.result.phase);
+        nativePhase = probe.result.phase as 0 | 1 | 2;
         if (expectedMaximum !== undefined) {
           // A configured wake must retain the actual saved picker selection
           // across native navigation; never silently fall back to defaults.
           stage = 'picker';
-          /** @type {[PageTicket, number, number]} */
-          const modelArgs = [pageTicket, expectedMaximum, Math.max(1, Math.min(1500, activeTicket.expires_at - now()))];
-          const modelRuns = await pageScript({
+          const modelArgs: [PageTicket, number, number] = [pageTicket, expectedMaximum, Math.max(1, Math.min(1500, activeTicket.expires_at - now()))];
+          const modelRuns: Injection<PrefillModelResult>[] = await pageScript({
             target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args: modelArgs,
           });
           const model = modelRuns[0];
@@ -744,10 +667,8 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         stage = 'send';
         // Host-side seal before execution. A lost result can never authorize a retry.
         sent = true;
-        /** @type {[PageTicket, number, number, number]} */
-        const sendArgs = [pageTicket, Math.max(1, Math.min(15000, activeTicket.expires_at - now())), 100, nativePhase];
-        /** @type {import('./types.js').Injection<PrefillWakeResult>[]} */
-        const wakeRuns = await pageScript({
+        const sendArgs: [PageTicket, number, number, number] = [pageTicket, Math.max(1, Math.min(15000, activeTicket.expires_at - now())), 100, nativePhase];
+        const wakeRuns: Injection<PrefillWakeResult>[] = await pageScript({
           target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillWake, args: sendArgs,
         });
         const wake = wakeRuns[0];
@@ -758,8 +679,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           throw Error(reasons.has(wake.result.error ?? '') ? wake.result.error : 'send_unconfirmed');
         }
 
-        /** @type {string | undefined} */
-        let registrationDocumentId;
+        let registrationDocumentId: string | undefined;
         let approving = false;
         while (now() < activeTicket.expires_at) {
           stage = 'registration';
@@ -775,15 +695,13 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           }
           if (!validTicket(activeTicket, now())) throw Error('expired');
           if (current.pendingUrl || !savedChatURL(current.url)) throw Error('page_changed');
-          newURL = /** @type {string} */ (current.url);
+          newURL = current.url as string;
           await reportChat(newURL);
 
-          /** @type {[PageTicket, 'registration']} */
-          const registrationArgs = [pageTicket, 'registration'];
+          const registrationArgs: [PageTicket, 'registration'] = [pageTicket, 'registration'];
           const registrationTarget = registrationDocumentId ?
             {tabId: activeTab.id, documentIds: [registrationDocumentId]} : {tabId: activeTab.id};
-          /** @type {import('./types.js').Injection<PageProbe>[]} */
-          const registrationRuns = await pageScript({
+          const registrationRuns: Injection<PageProbe>[] = await pageScript({
             target: registrationTarget, func: pageWake, args: registrationArgs,
           });
           const value = registrationRuns[0];
@@ -796,10 +714,8 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           if (state.optionsPoint && !approving) {
             stage = 'permission';
             approving = true;
-            /** @type {[PageTicket, string, string]} */
-            const permissionArgs = [pageTicket, 'options', newURL];
-            /** @type {import('./types.js').Injection<boolean>[]} */
-            const permissionRuns = await pageScript({
+            const permissionArgs: [PageTicket, string, string] = [pageTicket, 'options', newURL];
+            const permissionRuns: Injection<boolean>[] = await pageScript({
               target: {tabId: activeTab.id, documentIds: [boundDocumentId]}, func: pagePermission, args: permissionArgs,
             });
             const clicked = permissionRuns[0];
@@ -812,10 +728,8 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
             if (!['Always allow', `Allow ${activeTicket.connector} for this conversation`].includes(option)) throw Error('permission_unconfirmed');
             stage = 'permission';
             approving = true;
-            /** @type {[PageTicket, string, string]} */
-            const permissionArgs = [pageTicket, option, newURL];
-            /** @type {import('./types.js').Injection<boolean>[]} */
-            const permissionRuns = await pageScript({
+            const permissionArgs: [PageTicket, string, string] = [pageTicket, option, newURL];
+            const permissionRuns: Injection<boolean>[] = await pageScript({
               target: {tabId: activeTab.id, documentIds: [boundDocumentId]}, func: pagePermission, args: permissionArgs,
             });
             const clicked = permissionRuns[0];
@@ -841,8 +755,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       await browser.debugger.attach({tabId: activeTab.id}, '1.3'); attached = true;
       // Trusted input into our background composer tab needs an active renderer.
       await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});
-      /** @param {PageAction} action @returns {Promise<PageProbe>} */
-      const read = async action => {
+      const read = async (action: PageAction): Promise<PageProbe> => {
         stage = action;
         if (!validTicket(activeTicket, now())) throw Error('expired');
         const registration = sent && action === 'registration';
@@ -855,15 +768,14 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
           await pause(200); current = await browser.tabs.get(activeTab.id);
         }
         if (current.pendingUrl || current.url !== home && !(action === 'registration' && savedChatURL(current.url))) throw Error('page_changed');
-        const [value] = await pageScript({target: {tabId: activeTab.id, ...(documentId && !registration ? {documentIds: [documentId]} : {})}, func: pageWake, args: [pageTicket, action]});
+        const [value] = await pageScript({target: {tabId: activeTab.id, ...(documentId && !registration ? {documentIds: [documentId]} : {})}, func: pageWake, args: [pageTicket, action]}) as Injection<PageProbe>[];
         if (!value?.result || typeof value.documentId !== 'string') throw Error('page_changed');
         if (documentId && value.documentId !== documentId && !(registration && savedChatURL(value.result.url))) throw Error('page_changed');
         documentId = value.documentId;
         if (value.result.rateLimited) throw Error('rate_limited');
         return value.result;
       };
-      /** @param {PageAction} action @param {(result: PageProbe) => unknown} predicate */
-      const wait = async (action, predicate) => {
+      const wait = async (action: PageAction, predicate: (result: PageProbe) => unknown): Promise<PageProbe> => {
         while (now() < activeTicket.expires_at) {
           const result = await read(action);
           if (predicate(result)) return result;
@@ -871,8 +783,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         }
         throw Error('expired');
       };
-      /** @param {string} method @param {Record<string, unknown>} params */
-      const dispatch = async (method, params) => {
+      const dispatch = async (method: string, params: Record<string, unknown>): Promise<void> => {
         await read(sent ? 'registration' : 'ready');
         stage = 'input';
         // A lost debugger reply can still have inserted text. The page cleanup
@@ -880,14 +791,12 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         if (method === 'Input.insertText') draftTicket = pageTicket;
         await browser.debugger.sendCommand({tabId: activeTab.id}, method, params);
       };
-      /** @param {'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Escape' | 'Enter' | 'End'} name */
-      const key = async name => {
+      const key = async (name: 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Escape' | 'Enter' | 'End'): Promise<void> => {
         const codes = {ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Escape: 27, Enter: 13, End: 35};
         await dispatch('Input.dispatchKeyEvent', {type: 'keyDown', key: name, code: name, windowsVirtualKeyCode: codes[name]});
         await dispatch('Input.dispatchKeyEvent', {type: 'keyUp', key: name, code: name, windowsVirtualKeyCode: codes[name]});
       };
-      /** @param {import('./types.js').Point | null | undefined} p */
-      const click = async p => {
+      const click = async (p: {x: number, y: number} | null | undefined): Promise<void> => {
         if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('page_not_ready');
         await dispatch('Input.dispatchMouseEvent', {type: 'mouseMoved', x: p.x, y: p.y});
         await dispatch('Input.dispatchMouseEvent', {type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1});
@@ -911,7 +820,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         if (!state.empty) throw Error('composer_not_empty');
       }
       if (!state.chat) { await click(state.chatPoint); await wait('ready', r => r.chat); }
-      const openPicker = async () => {
+      const openPicker = async (): Promise<PageProbe> => {
         const current = await read('picker');
         if (current.open) return current;
         const model = await read('modelFocus');
@@ -925,19 +834,17 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         state = await openPicker();
         state = await wait('picker', r => r.row === activeTicket.row);
       }
-      /** @param {PageProbe} candidate @param {number | undefined} expectedPosition @param {number | undefined} expectedMaximum */
-      const canonicalPicker = (candidate, expectedPosition, expectedMaximum) => {
+      const canonicalPicker = (candidate: PageProbe, expectedPosition: number | undefined, expectedMaximum: number | undefined) => {
         if (candidate.open !== true || candidate.row !== activeTicket.row || candidate.minimum !== '0' ||
             typeof candidate.maximum !== 'string' || !/^[0-4]$/.test(candidate.maximum) ||
             !Number.isInteger(candidate.position)) return null;
-        const maximum = Number(candidate.maximum), position = /** @type {number} */ (candidate.position);
+        const maximum = Number(candidate.maximum), position = candidate.position as number;
         if (position < 0 || position > maximum || expectedMaximum !== undefined && maximum !== expectedMaximum ||
             expectedPosition !== undefined && position !== expectedPosition || !levels[position] ||
             candidate.status !== `${levels[position]}, ${position + 1} of ${maximum + 1}.`) return null;
         return {maximum, position, state: candidate};
       };
-      /** @param {number | undefined} expectedPosition @param {number | undefined} expectedMaximum */
-      const settlePicker = async (expectedPosition, expectedMaximum) => {
+      const settlePicker = async (expectedPosition: number | undefined, expectedMaximum: number | undefined) => {
         const deadline = Math.min(activeTicket.expires_at, now() + 1000);
         while (now() < deadline) {
           const candidate = await read('picker');
@@ -949,8 +856,8 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       };
       const initial = await settlePicker(undefined, undefined);
       if (activeTicket.level > initial.maximum) throw Error('level_unconfirmed');
-      /** Once row/range authority exists, never settle through a mutation. @param {number} expectedPosition */
-      const settledAuthority = async expectedPosition => {
+      /** Once row/range authority exists, never settle through a mutation. */
+      const settledAuthority = async (expectedPosition: number) => {
         const deadline = Math.min(activeTicket.expires_at, now() + 1000);
         while (now() < deadline) {
           const candidate = await read('picker');
@@ -965,7 +872,6 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       await settledAuthority(initial.position);
       if (!(await read('sliderFocus')).focused) throw Error('level_unconfirmed');
       let cursor = initial.position;
-      /** @type {PageProbe} */
       let observed = initial.state;
       for (let i = 0; i < initial.position; i++) {
         await settledAuthority(cursor);
@@ -998,10 +904,10 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         const upload = await read('uploadInput');
         if (!upload.ready || upload.uploadSelector !== 'form input[type="file"][aria-label="Attach files"]') throw Error('upload_unconfirmed');
         const target = {tabId: activeTab.id};
-        const {root} = /** @type {import('./types.js').DebugReply} */ (await browser.debugger.sendCommand(target, 'DOM.getDocument', {}));
+        const {root} = await browser.debugger.sendCommand(target, 'DOM.getDocument', {}) as DebugReply;
         if (!Number.isInteger(root?.nodeId)) throw Error('upload_unconfirmed');
-        const {nodeId} = /** @type {import('./types.js').DebugReply} */ (await browser.debugger.sendCommand(target, 'DOM.querySelector', {nodeId: /** @type {{nodeId: number}} */ (root).nodeId, selector: upload.uploadSelector}));
-        if (!Number.isInteger(nodeId) || /** @type {number} */ (nodeId) <= 0 || !(await read('uploadInput')).ready) throw Error('upload_unconfirmed');
+        const {nodeId} = await browser.debugger.sendCommand(target, 'DOM.querySelector', {nodeId: (root as {nodeId: number}).nodeId, selector: upload.uploadSelector}) as DebugReply;
+        if (!Number.isInteger(nodeId) || (nodeId as number) <= 0 || !(await read('uploadInput')).ready) throw Error('upload_unconfirmed');
         await browser.debugger.sendCommand(target, 'DOM.setFileInputFiles', {nodeId, files: activeTicket.attachments.map(file => file.path)});
         await wait('uploads', r => r.ready);
         // Upload controls may take focus; bind the connector editor again before typing.
@@ -1016,13 +922,13 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       let approving = false;
       while (now() < activeTicket.expires_at) {
         state = await read('registration');
-        if (savedChatURL(state.url)) { newURL = state.url; await reportChat(/** @type {string} */ (state.url)); }
+        if (savedChatURL(state.url)) { newURL = state.url; await reportChat(state.url as string); }
         if (state.optionsPoint && !approving) { await click(state.optionsPoint); continue; }
         if (state.allowPoint && !approving) {
           if (!['Always allow', `Allow ${activeTicket.connector} for this conversation`].includes(state.allowOption ?? '')) throw Error('permission_unconfirmed');
           approving = true;
           await click(state.allowPoint);
-          permissions.push({connector: activeTicket.connector, option: /** @type {string} */ (state.allowOption)});
+          permissions.push({connector: activeTicket.connector, option: state.allowOption as string});
           continue;
         }
         if (!state.permissionPending) approving = false;
@@ -1034,7 +940,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
       if (!newURL || now() >= activeTicket.expires_at) throw Error('expired');
       await request(config, '/extension/result', {nonce: activeTicket.nonce, ok: true, url: newURL, ...(permissions.length ? {permissions} : {})}, fetcher);
     } catch (error) {
-      if (config && /^[A-Za-z0-9_-]{32}$/.test(/** @type {Ticket | null | undefined} */ (ticket)?.nonce ?? '')) {
+      if (config && /^[A-Za-z0-9_-]{32}$/.test((ticket as Ticket | null | undefined)?.nonce ?? '')) {
         // A configured send may have succeeded before its reply was lost.
         // Navigation alone is insufficient: require our exact nonce-bearing
         // first message and the same owned tab/window before and after lookup.
@@ -1062,16 +968,15 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         if (!ordinary && sent && !newURL && tab) {
           try { const current = await browser.tabs.get(tab.id); if (savedChatURL(current.url)) newURL = current.url; } catch {}
         }
-        const reason = reasons.has(/** @type {Error | undefined} */ (error)?.message ?? '') ? /** @type {Error} */ (error).message : 'browser_error';
-        try { await request(config, '/extension/result', {nonce: /** @type {Ticket} */ (ticket).nonce, ok: false, error: reason, stage, ...(permissions.length ? {permissions} : {}), ...(!native && newURL ? {url: newURL} : {})}, fetcher); } catch { /* Never retry an uncertain wake. */ }
+        const reason = reasons.has((error as Error | undefined)?.message ?? '') ? (error as Error).message : 'browser_error';
+        try { await request(config, '/extension/result', {nonce: (ticket as Ticket).nonce, ok: false, error: reason, stage, ...(permissions.length ? {permissions} : {}), ...(!native && newURL ? {url: newURL} : {})}, fetcher); } catch { /* Never retry an uncertain wake. */ }
         if (ordinary && !sent && stage === 'loading' && wakeDiagnostic) {
           await persistWakeDiagnostic(browser, wakeDiagnostic, reason, now());
         }
       }
     } finally {
       if (!sent && draftTicket && tab && documentId) {
-        /** @type {ReturnType<typeof setTimeout> | undefined} */
-        let timer;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           // Do not use read(): cleanup must also work after ticket expiry.
           await Promise.race([
@@ -1081,7 +986,7 @@ export function makePoller(browser, fetcher = fetch, now = Date.now, pause = ms 
         } catch { /* Preserve the original failure, even if cleanup fails. */ }
         finally { clearTimeout(timer); }
       }
-      if (attached) { try { await browser.debugger.detach({tabId: /** @type {import('./types.js').Tab} */ (tab).id}); } catch {} }
+      if (attached) { try { await browser.debugger.detach({tabId: (tab as Tab).id}); } catch {} }
       if (tab && Number.isSafeInteger(tab.id) && tab.id > 0) {
         try { await browser.tabs.remove(tab.id); await forgetOwnedWakeTab(browser, tab.id, ownedWindowId); } catch { /* The next idle poll closes the recorded orphan. */ }
       } else if (native && typeof ownedWindowId === 'number' && Number.isSafeInteger(ownedWindowId) && ownedWindowId > 0) {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { Pairing } from '../src/pairing.ts';
-import { ensurePairing, defaultAPI } from '../extension/pairing.js';
+import { ensurePairing, defaultAPI } from '../extension/pairing.ts';
 import { main } from '../src/cli.ts';
 import type { Fetcher } from '../extension/types.d.ts';
 

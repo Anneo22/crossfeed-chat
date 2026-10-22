@@ -28,7 +28,7 @@ The ChatGPT interface can change and break a wake. Answers arrive whole, not str
 
 ## Install
 
-You need [Node.js](https://nodejs.org/) 24.18 or newer, Chrome 120+ or a Chromium browser such as Brave, an HTTPS tunnel (such as [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)), and a ChatGPT plan that supports custom MCP connectors. There is no build step and no runtime dependency: Node runs the TypeScript source directly.
+You need [Node.js](https://nodejs.org/) 24.18 or newer, Chrome 120+ or a Chromium browser such as Brave, an HTTPS tunnel (such as [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)), and a ChatGPT plan that supports custom MCP connectors. There is no server build step and no runtime dependency: Node runs the TypeScript source directly. The unpacked extension is TypeScript too, so it needs one build before Chrome can load it.
 
 Clone the repository, put a 32-256 character `CROSSFEED_API_KEY` in the environment from your password manager, and start the server:
 
@@ -43,6 +43,8 @@ node src/cli.ts link                 # opens registration for five minutes
 node src/cli.ts approve --pending    # after adding https://your-tunnel.example/mcp in ChatGPT
 node src/cli.ts approve <id>
 ```
+
+Run `npm ci && npm run build` before loading `extension/` unpacked.
 
 Load `extension/` as an unpacked extension (Developer mode), approve its pairing code, and add a worker:
 

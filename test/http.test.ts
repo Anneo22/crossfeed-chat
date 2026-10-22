@@ -9,8 +9,8 @@ import { main } from '../src/cli.ts';
 import { hash, nonce } from '../src/security.ts';
 import { fakeHTTP } from './fake-http.ts';
 import type { TestResponse } from './fake-http.ts';
-import { makePoller, validTicket, request as extensionRequest } from '../extension/core.js';
-import { pageWake, prefillProbe, prefillWake } from '../extension/page.js';
+import { makePoller, validTicket, request as extensionRequest } from '../extension/core.ts';
+import { pageWake, prefillProbe, prefillWake } from '../extension/page.ts';
 import manifest from '../package.json' with { type: 'json' };
 
 const issuer = 'https://crossfeed.example.test';
@@ -1717,7 +1717,7 @@ test('legacy extension gets fresh exact-title markers from the new server withou
   }});
   await f.call('/workers/add',{label:'sol',row:'Latest',level:2});
   const markers: string[] = [];
-  const bootstrap = await fs.readFile(new URL('../extension/wake-window.js', import.meta.url), 'utf8');
+  const bootstrap = await fs.readFile(new URL('../extension/wake-window.ts', import.meta.url), 'utf8');
   for (let i = 0; i < 2; i++) {
     f.app.wakes.enqueue('sol');
     const ticket = (await f.call('/extension/next',{}, {key:f.extensionSecret})).data.ticket;

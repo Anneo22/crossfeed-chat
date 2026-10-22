@@ -6,7 +6,7 @@ by Rocco Angelella and the PiLink contributors:
 https://github.com/roccoangelella/PiLink
 
 Its gateway_exchange protocol, paired OAuth approval flow, and validation
-rules derive from PiLink. The Chat/Work check in extension/page.js adapts PiLink's
+rules derive from PiLink. The Chat/Work check in extension/page.ts adapts PiLink's
 browser-extension/chat-mode.js; the fresh-chat wake sequence follows PiLink's worker launcher. PiLink's MIT copyright and
 permission notice are retained below. The optional src/wake-focus.ts KWin
 restoration script and its short-lived DBus preparation adapt PiLink's

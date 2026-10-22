@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prefillModel } from '../extension/prefill-model.js';
+import { prefillModel } from '../extension/prefill-model.ts';
 
 const globals: any = globalThis;
 const ticket = () => ({nonce:'a'.repeat(32),label:'wake-'+'a'.repeat(32),connector:'Crossfeed Chat',row:'Latest',level:2,expires_at:Date.now()+60000});

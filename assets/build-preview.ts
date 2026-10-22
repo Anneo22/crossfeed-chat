@@ -1,25 +1,27 @@
 // An offline raster proof when sandbox permissions prevent a browser screenshot.
 // This composes the actual exports at 1x and 4x; it does not capture preview.html.
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+const { readFileSync } = fs;
+const { dirname, join, resolve } = path;
 const root = dirname(fileURLToPath(import.meta.url));
 if (!process.env.CROSSFEED_SHARP_PACKAGE) throw Error('Set CROSSFEED_SHARP_PACKAGE to the package.json that provides sharp');
 const require = createRequire(resolve(process.env.CROSSFEED_SHARP_PACKAGE));
 const sharp = require('sharp');
 const html = readFileSync(join(root, 'preview.html'), 'utf8');
-const escape = text => text.replaceAll('&','&amp;').replaceAll('<','&lt;');
-const layers = [];
-function text(value, x, y, color='#14130F', size=14) {
+const escape = (text: string): string => text.replaceAll('&','&amp;').replaceAll('<','&lt;');
+const layers: {input: Buffer, left: number, top: number}[] = [];
+function text(value: string, x: number, y: number, color='#14130F', size=14): void {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1250" height="40"><text x="0" y="25" font-family="sans-serif" font-size="${size}" fill="${color}">${escape(value)}</text></svg>`;
   layers.push({ input: Buffer.from(svg), left: x, top: y });
 }
-async function image(file, width, height, x, y) {
+async function image(file: string, width: number, height: number, x: number, y: number): Promise<void> {
   let input = readFileSync(join(root, file));
   if (file==='mark.svg') {
     let source = input.toString();
-    const palette = {i:'#14130F',p:'#FAF9F4',t:'#F1DFD4',h:'#C4552A',paper:'#FAF9F4',ink:'#14130F',tint:'#F1DFD4',accent:'#C4552A'};
+    const palette: Record<string, string> = {i:'#14130F',p:'#FAF9F4',t:'#F1DFD4',h:'#C4552A',paper:'#FAF9F4',ink:'#14130F',tint:'#F1DFD4',accent:'#C4552A'};
     source = source.replace(/<style>.*?<\/style>/s, '');
     for (const [key,value] of Object.entries(palette)) source=source.replaceAll(`var(--${key})`,value);
     input=Buffer.from(source);
@@ -30,7 +32,7 @@ let y=24;
 text('Crossfeed Chat · raster export proof', 30, y, '#14130F', 24); y+=45;
 text('Actual exports at 1× and 4× on their intended grounds. Assembled with sharp; this is not an HTML screenshot.',30,y); y+=50;
 for (const ground of ['light','dark']) {
-  const section=html.match(new RegExp(`<section class="theme ${ground}">(.*?)</section>`,'s'))[1];
+  const section=html.match(new RegExp(`<section class="theme ${ground}">(.*?)</section>`,'s'))![1];
   const ink=ground==='light'?'#14130F':'#E9E6DF';
   const paper=ground==='light'?'#FAF9F4':'#141311';
   const top=y;

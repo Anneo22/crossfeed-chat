@@ -1,4 +1,5 @@
-export { prefillModel } from './prefill-model.js';
+import type { PageAction, PageProbe, PageTicket, Point, PrefillLocationDiagnostic, PrefillProbeResult, PrefillWakeResult } from './types.d.ts';
+export { prefillModel } from './prefill-model.ts';
 
 // Serialized into the isolated world. No extension key reaches the page.
 // The ordinary wake path is adapted from PiLink's MIT-licensed one-shot
@@ -6,13 +7,8 @@ export { prefillModel } from './prefill-model.js';
 /**
  * Non-sending native-prefill attestation. The host may authorize an already
  * consumed bare root only for the exact newly-created owned wake tab.
- * @param {import('./types.js').PageTicket} ticket
- * @param {boolean} [allowConsumedRoot]
- * @param {number} [timeoutMs]
- * @param {number} [pollMs]
- * @returns {Promise<import('./types.js').PrefillProbeResult>}
  */
-export async function prefillProbe(ticket, allowConsumedRoot = false, timeoutMs = 15000, pollMs = 100) {
+export async function prefillProbe(ticket: PageTicket, allowConsumedRoot = false, timeoutMs = 15000, pollMs = 100): Promise<PrefillProbeResult> {
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
   const composerSelector = 'form #prompt-textarea[contenteditable="true"], form [contenteditable="true"][role="textbox"]';
@@ -20,15 +16,11 @@ export async function prefillProbe(ticket, allowConsumedRoot = false, timeoutMs 
   const started = Date.now(), deadline = Math.min(ticket.expires_at, started + Math.max(1, Math.min(timeoutMs, 15000)));
   const ownedDocument = document;
   let phase = -1;
-  /** @template {Element} E @param {E | null | undefined} el @returns {el is E} */
-  const visible = el => /** @type {boolean} */ (!!el && el.isConnected !== false && !el.closest('[hidden], [inert]') &&
-    el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility)));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement[]} */
-  const all = (root, selector) => /** @type {HTMLElement[]} */ ([...root.querySelectorAll(selector)].filter(visible));
-  /** @param {number} ms @returns {Promise<void>} */
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  /** @param {unknown} value @returns {-1 | 0 | 1 | 2} */
-  const nativePhase = value => {
+  const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') &&
+    el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+  const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
+  const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+  const nativePhase = (value: unknown): -1 | 0 | 1 | 2 => {
     if (typeof value !== 'string') return -1;
     const home = 'https://chatgpt.com/';
     if (!value.startsWith(home) || value.includes('#')) return -1;
@@ -44,23 +36,19 @@ export async function prefillProbe(ticket, allowConsumedRoot = false, timeoutMs 
     if (!['q', 'prompt'].includes(key) || !url.search.startsWith(`?${key}=`) || decoded !== prompt) return -1;
     return key === 'q' ? 0 : 1;
   };
-  const urlPhase = () => {
+  const urlPhase = (): -1 | 0 | 1 | 2 => {
     const next = nativePhase(location.href);
     if (next < 0 || phase >= 0 && next < phase || phase < 0 && next === 2 && !allowConsumedRoot) return -1;
     phase = next;
     return next;
   };
   const queryNames = new Set(['q', 'prompt', 'model', 'temporary-chat', 'hints', 'ref', 'utm_source', 'utm_campaign', 'other']);
-  /** @returns {import('./types.js').PrefillLocationDiagnostic} */
-  const locationDiagnostic = () => {
+  const locationDiagnostic = (): PrefillLocationDiagnostic => {
     const value = typeof location?.href === 'string' ? location.href : undefined;
-    /** @type {import('./types.js').PrefillLocationDiagnostic['uri_class']} */
-    let uriClass = 'missing';
-    /** @type {-1 | 0 | 1 | 2} */
-    let parsedPhase = -1;
+    let uriClass: PrefillLocationDiagnostic['uri_class'] = 'missing';
+    let parsedPhase: -1 | 0 | 1 | 2 = -1;
     let queryCount = 0;
-    /** @type {string[]} */
-    let names = [];
+    let names: string[] = [];
     let qMatches = false, promptMatches = false;
     if (value == null) return {uri_class: uriClass, parsed_phase: parsedPhase, query_count: queryCount, query_names: names, q_matches: qMatches, prompt_matches: promptMatches};
     if (value === '' || value === 'about:blank') {
@@ -88,12 +76,10 @@ export async function prefillProbe(ticket, allowConsumedRoot = false, timeoutMs 
     } else if (url.pathname === '/login' || url.pathname.startsWith('/auth/')) uriClass = 'login';
     else if (url.pathname.startsWith('/c/')) uriClass = 'conversation';
     else uriClass = 'other';
-    return {uri_class: uriClass, parsed_phase: /** @type {-1 | 0 | 1 | 2} */ (parsedPhase), query_count: queryCount, query_names: names, q_matches: qMatches, prompt_matches: promptMatches};
+    return {uri_class: uriClass, parsed_phase: parsedPhase, query_count: queryCount, query_names: names, q_matches: qMatches, prompt_matches: promptMatches};
   };
-  /** @param {string} error @param {boolean} [withLocation] @returns {import('./types.js').PrefillProbeResult} */
-  const fail = (error, withLocation = false) => ({ready: false, error, ...(withLocation ? {diagnostic: locationDiagnostic()} : {})});
-  /** @param {HTMLElement} editor @returns {-1 | 0 | 1} */
-  const editorState = editor => {
+  const fail = (error: string, withLocation = false): PrefillProbeResult => ({ready: false, error, ...(withLocation ? {diagnostic: locationDiagnostic()} : {})});
+  const editorState = (editor: HTMLElement): -1 | 0 | 1 => {
     if (!visible(editor) || editor.closest('form') == null) return -1;
     const raw = editor.textContent ?? '', links = all(editor, 'a'), fixed = all(editor, '[contenteditable="false"]');
     if (raw === '' && links.length === 0 && fixed.length === 0) return 0;
@@ -126,24 +112,17 @@ export async function prefillProbe(ticket, allowConsumedRoot = false, timeoutMs 
     const form = editors[0].closest('form');
     if (!form) return fail('page_not_ready');
     const attachments = all(form, '[data-testid*="attachment"], img');
-    const files = /** @type {HTMLInputElement[]} */ ([...document.querySelectorAll('input[type="file"]')]);
+    const files = [...document.querySelectorAll('input[type="file"]')] as HTMLInputElement[];
     if (attachments.length || files.some(input => input.files?.length) || all(document, 'button[data-testid="stop-button"], button[aria-label="Stop generating"]').length) return fail('composer_not_empty');
     const current = urlPhase();
     if (document !== ownedDocument) return fail('page_changed');
     if (current < 0) return fail('page_changed', true);
-    return {ready: true, phase: /** @type {0 | 1 | 2} */ (current)};
+    return {ready: true, phase: current as 0 | 1 | 2};
   }
   return fail(ticket.expires_at <= Date.now() ? 'expired' : 'page_not_ready');
 }
 
-/**
- * @param {import('./types.js').PageTicket} ticket
- * @param {number} [timeoutMs]
- * @param {number} [pollMs]
- * @param {number} [initialPhase]
- * @returns {Promise<import('./types.js').PrefillWakeResult>}
- */
-export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initialPhase = -1) {
+export async function prefillWake(ticket: PageTicket, timeoutMs = 15000, pollMs = 100, initialPhase = -1): Promise<PrefillWakeResult> {
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
   const composerSelector = 'form #prompt-textarea[contenteditable="true"], form [contenteditable="true"][role="textbox"]';
@@ -152,21 +131,15 @@ export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initi
   const started = Date.now(), deadline = Math.min(ticket.expires_at, started + Math.max(1, Math.min(timeoutMs, 15000)));
   const ownedDocument = document;
   let phase = Number.isInteger(initialPhase) && initialPhase >= 0 && initialPhase <= 2 ? initialPhase : -1, sealed = false;
-  /** @type {HTMLElement | null} */
-  let pinned = null;
+  let pinned: HTMLElement | null = null;
 
-  /** @template {Element} E @param {E | null | undefined} el @returns {el is E} */
-  const visible = el => /** @type {boolean} */ (!!el && el.isConnected !== false && !el.closest('[hidden], [inert]') &&
-    el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility)));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement[]} */
-  const all = (root, selector) => /** @type {HTMLElement[]} */ ([...root.querySelectorAll(selector)].filter(visible));
-  /** @param {number} ms @returns {Promise<void>} */
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  /** @param {string} error @returns {import('./types.js').PrefillWakeResult} */
-  const fail = error => ({sent: false, error});
+  const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') &&
+    el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+  const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
+  const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+  const fail = (error: string): PrefillWakeResult => ({sent: false, error});
 
-  /** @param {unknown} value @returns {-1 | 0 | 1 | 2} */
-  const nativePhase = value => {
+  const nativePhase = (value: unknown): -1 | 0 | 1 | 2 => {
     if (typeof value !== 'string') return -1;
     const home = 'https://chatgpt.com/';
     if (!value.startsWith(home) || value.includes('#')) return -1;
@@ -182,7 +155,7 @@ export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initi
     if (!['q', 'prompt'].includes(key) || !url.search.startsWith(`?${key}=`) || decoded !== prompt) return -1;
     return key === 'q' ? 0 : 1;
   };
-  const urlPhase = () => {
+  const urlPhase = (): -1 | 0 | 1 | 2 => {
     const next = nativePhase(location.href);
     if (next < 0 || phase >= 0 && next < phase) return -1;
     // With no host-acquired phase, a restored root draft is never authority.
@@ -191,8 +164,7 @@ export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initi
     return next;
   };
 
-  /** @param {HTMLElement} editor */
-  const exactEditor = editor => {
+  const exactEditor = (editor: HTMLElement): boolean => {
     if (!visible(editor) || editor.closest('form') == null) return false;
     const raw = editor.textContent ?? '';
     const links = all(editor, 'a');
@@ -243,10 +215,10 @@ export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initi
       const form = editor.closest('form');
       if (!form) return fail('page_not_ready');
       const attachments = all(form, '[data-testid*="attachment"], img');
-      const files = /** @type {HTMLInputElement[]} */ ([...document.querySelectorAll('input[type="file"]')]);
+      const files = [...document.querySelectorAll('input[type="file"]')] as HTMLInputElement[];
       if (attachments.length || files.some(input => input.files?.length) || all(document, 'button[data-testid="stop-button"], button[aria-label="Stop generating"]').length) return fail('composer_not_empty');
 
-      const sends = /** @type {HTMLButtonElement[]} */ (all(form, sendSelector));
+      const sends = all(form, sendSelector) as HTMLButtonElement[];
       if (sends.length > 1) return fail('send_unconfirmed');
       if (sends.length === 0 || sends[0].disabled || sends[0].getAttribute('aria-disabled') === 'true') {
         await sleep(Math.min(pollMs, Math.max(1, deadline - Date.now()))); continue;
@@ -276,18 +248,11 @@ export async function prefillWake(ticket, timeoutMs = 15000, pollMs = 100, initi
 
 /**
  * Click only a previously observed connector-owned approval control.
- * @param {import('./types.js').PageTicket} ticket
- * @param {'options' | string} choice
- * @param {string} expectedURL
- * @returns {boolean}
  */
-export function pagePermission(ticket, choice, expectedURL) {
-  /** @param {Element | null | undefined} el */
-  const text = el => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  /** @template {Element} E @param {E | null | undefined} el @returns {el is E} */
-  const visible = el => /** @type {boolean} */ (!!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility)));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement[]} */
-  const all = (root, selector) => /** @type {HTMLElement[]} */ ([...root.querySelectorAll(selector)].filter(visible));
+export function pagePermission(ticket: PageTicket, choice: string, expectedURL: string): boolean {
+  const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+  const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
   if (ticket.expires_at <= Date.now() || location.href !== expectedURL ||
       !/^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]{1,128}$/.test(expectedURL)) return false;
   const cards = all(document, '[data-codex-approval-surface="true"]').filter(el =>
@@ -296,16 +261,15 @@ export function pagePermission(ticket, choice, expectedURL) {
   const card = cards[0], alerts = all(card, '[role="alert"]');
   if (alerts.length !== 1 || text(all(alerts[0], 'span')[0]) !== ticket.connector) return false;
   const materialization = all(alerts[0], 'div').some(el => text(el) === 'Allow file materialization?');
-  const direct = /** @type {HTMLButtonElement[]} */ (all(card, 'button')).filter(el =>
+  const direct = (all(card, 'button') as HTMLButtonElement[]).filter(el =>
     text(el) === 'Always allow' && !el.disabled && el.getAttribute('aria-disabled') !== 'true');
-  /** @type {HTMLElement | null} */
-  let button = null;
+  let button: HTMLElement | null = null;
   if (choice === 'Always allow') {
     if (direct.length !== 1) return false;
     button = direct[0];
   } else {
     if (!materialization || direct.length) return false;
-    const options = /** @type {HTMLButtonElement[]} */ (all(card, 'button[aria-label="Approval options"][aria-haspopup="menu"]'));
+    const options = all(card, 'button[aria-label="Approval options"][aria-haspopup="menu"]') as HTMLButtonElement[];
     if (options.length !== 1 || options[0].disabled || options[0].getAttribute('aria-disabled') === 'true') return false;
     if (choice === 'options') {
       if (options[0].getAttribute('aria-expanded') === 'true') return false;
@@ -324,26 +288,14 @@ export function pagePermission(ticket, choice, expectedURL) {
   return true;
 }
 
-/**
- * @param {import('./types.js').PageTicket} ticket
- * @param {import('./types.js').PageAction} action
- * @returns {import('./types.js').PageProbe}
- */
-export function pageWake(ticket, action) {
-  /** @param {Element | null | undefined} el */
-  const text = el => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  /** @template {Element} E @param {E | null | undefined} el @returns {el is E} */
-  const visible = el => /** @type {boolean} */ (el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility)));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement[]} */
-  const all = (root, selector) => /** @type {HTMLElement[]} */ ([...root.querySelectorAll(selector)].filter(visible));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement | null} */
-  const one = (root, selector) => { const found = all(root, selector); return found.length === 1 ? found[0] : null; };
-  /** @param {Element | null | undefined} el @returns {import('./types.js').Point | null} */
-  const point = el => { if (!visible(el)) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
-  /** @param {HTMLElement | null | undefined} el */
-  const focus = el => { if (!el) return false; el.focus(); return document.activeElement === el; };
-  /** @param {Element | null | undefined} el */
-  const selected = el => el?.getAttribute('aria-pressed') === 'true' || el?.getAttribute('aria-selected') === 'true' || el?.getAttribute('data-state') === 'active';
+export function pageWake(ticket: PageTicket, action: PageAction): PageProbe {
+  const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+  const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
+  const one = (root: ParentNode, selector: string): HTMLElement | null => { const found = all(root, selector); return found.length === 1 ? found[0] : null; };
+  const point = (el: Element | null | undefined): Point | null => { if (!visible(el)) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
+  const focus = (el: HTMLElement | null | undefined): boolean => { if (!el) return false; el.focus(); return document.activeElement === el; };
+  const selected = (el: Element | null | undefined): boolean => el?.getAttribute('aria-pressed') === 'true' || el?.getAttribute('aria-selected') === 'true' || el?.getAttribute('data-state') === 'active';
   const home = 'https://chatgpt.com/';
   if (action !== 'discardOwnDraft' && action !== 'discardBareMention' && ticket.expires_at <= Date.now()) throw Error('expired');
   if (location.href !== home && !(action === 'registration' && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]{1,128}$/.test(location.href))) throw Error('page_changed');
@@ -353,8 +305,8 @@ export function pageWake(ticket, action) {
   if (action === 'discardOwnDraft' || action === 'discardBareMention') {
     // A bare mention carries no words of the owner's, so it can only be wake residue.
     const mine = action === 'discardBareMention'
-      ? (/** @type {string} */ text) => text.trim().toLowerCase() === `@${ticket.connector}`.toLowerCase()
-      : (/** @type {string} */ text) => text.startsWith(`@${ticket.connector}`);
+      ? (text: string) => text.trim().toLowerCase() === `@${ticket.connector}`.toLowerCase()
+      : (text: string) => text.startsWith(`@${ticket.connector}`);
     if (!editor?.isContentEditable || !mine(editor.textContent ?? '') || !focus(editor)) return {};
     const selection = document.getSelection();
     if (!selection) return {};
@@ -372,10 +324,10 @@ export function pageWake(ticket, action) {
   const model = one(document, 'button[aria-label="Select ChatGPT model"], [data-testid="model-switcher-dropdown-button"]');
   const buttons = all(document, 'button, [role="tab"]');
   const chat = buttons.find(b => text(b) === 'Chat'), work = buttons.find(b => text(b) === 'Work');
-  const modes = [];
+  const modes: boolean[] = [];
   if (chat && work && chat.parentElement === work.parentElement) {
     if (selected(chat) !== selected(work)) modes.push(selected(chat));
-    for (const el of all(/** @type {HTMLElement} */ (chat.parentElement), '[style]')) {
+    for (const el of all(chat.parentElement as HTMLElement, '[style]')) {
       const m = (el.getAttribute('style') ?? '').match(/(?:translateX\(\s*(0|100)%\s*\)|translate(?:\s*:\s*|\(\s*)(0|100)%)/i);
       if (m) modes.push((m[1] ?? m[2]) === '0');
     }
@@ -394,10 +346,10 @@ export function pageWake(ticket, action) {
     if (!alert || text(all(alert, 'span')[0]) !== ticket.connector) throw Error('permission_unconfirmed');
     const materialization = all(alert, 'div').some(el => text(el) === 'Allow file materialization?');
     const direct = all(card, 'button').filter(el => text(el) === 'Always allow');
-    if (direct.length === 1 && !/** @type {HTMLButtonElement} */ (direct[0]).disabled && direct[0].getAttribute('aria-disabled') !== 'true') return {url: location.href, permissionPending: true, allowPoint: point(direct[0]), allowOption: 'Always allow'};
+    if (direct.length === 1 && !(direct[0] as HTMLButtonElement).disabled && direct[0].getAttribute('aria-disabled') !== 'true') return {url: location.href, permissionPending: true, allowPoint: point(direct[0]), allowOption: 'Always allow'};
     if (!materialization || direct.length) throw Error('permission_unconfirmed');
     const options = one(card, 'button[aria-label="Approval options"][aria-haspopup="menu"]');
-    if (!options || options.getAttribute('aria-disabled') === 'true' || /** @type {HTMLButtonElement} */ (options).disabled) throw Error('permission_unconfirmed');
+    if (!options || options.getAttribute('aria-disabled') === 'true' || (options as HTMLButtonElement).disabled) throw Error('permission_unconfirmed');
     const menuId = options.getAttribute('aria-controls');
     if (options.getAttribute('aria-expanded') !== 'true') return {url: location.href, permissionPending: true, optionsPoint: point(options)};
     const menu = menuId ? document.getElementById(menuId) : null;
@@ -415,7 +367,7 @@ export function pageWake(ticket, action) {
     if (!menu) return { open: false };
     // The inactive list still records the selected model while the slider is
     // shown. Read that state, but point() refuses input into its inert track.
-    const rows = /** @type {HTMLElement[]} */ ([...menu.querySelectorAll('[role="menuitemradio"]')]);
+    const rows = [...menu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];
     const matches = rows.filter(el => text(el) === ticket.row || all(el, 'span').some(s => text(s) === ticket.row));
     const row = matches.length === 1 ? matches[0] : null;
     const slider = one(menu, '[role="slider"]');
@@ -429,7 +381,7 @@ export function pageWake(ticket, action) {
   const form = editor.closest('form');
   const attachmentNodes = form ? all(form, '[data-testid*="attachment"]') : [];
   const attachmentRoots = attachmentNodes.filter(el => !attachmentNodes.some(parent => parent !== el && parent.contains?.(el)));
-  const fileInputs = /** @type {HTMLInputElement[]} */ ([...document.querySelectorAll('input[type="file"]')]);
+  const fileInputs = [...document.querySelectorAll('input[type="file"]')] as HTMLInputElement[];
   const ownedFiles = () => {
     if (!form || ticket.type !== 'composer' || !Array.isArray(ticket.attachments)) throw Error('composer_not_empty');
     const attachments = ticket.attachments;
@@ -451,12 +403,12 @@ export function pageWake(ticket, action) {
     const completed = names.length === expected.length && attachmentRoots.every(chip =>
       chip.getAttribute('aria-busy') !== 'true' && !all(chip, '[role="progressbar"], [aria-busy="true"], [data-testid*="loading"], [data-testid*="spinner"]').length &&
       !/uploading|processing/i.test(text(chip)) &&
-      all(chip, 'button[data-testid="remove-attachment"], button[aria-label="Remove file"], button[aria-label="Remove attachment"]').some(button => !/** @type {HTMLButtonElement} */ (button).disabled));
+      all(chip, 'button[data-testid="remove-attachment"], button[aria-label="Remove file"], button[aria-label="Remove attachment"]').some(button => !(button as HTMLButtonElement).disabled));
     return {ready: completed};
   };
   if (action === 'uploadInput') {
     const uploadSelector = 'form input[type="file"][aria-label="Attach files"]';
-    const uploads = /** @type {HTMLInputElement[]} */ ([...document.querySelectorAll(uploadSelector)]);
+    const uploads = [...document.querySelectorAll(uploadSelector)] as HTMLInputElement[];
     if (ticket.type !== 'composer' || !form || uploads.length !== 1 || uploads[0].closest('form') !== form || uploads[0].disabled) throw Error('upload_unconfirmed');
     if (attachmentRoots.length || all(form, 'img').length || fileInputs.some(el => el.files?.length) || all(document, 'button[data-testid="stop-button"]').length) throw Error('composer_not_empty');
     return {ready: true, uploadSelector};
@@ -481,17 +433,17 @@ export function pageWake(ticket, action) {
     return { mentionPoint: matches.length === 1 ? point(matches[0]) : null };
   }
   if (action === 'resolved') {
-    const tail = resolved && editor.textContent.slice(chips[0].textContent.length);
-    return { resolved: !!resolved && /^\s*$/.test(/** @type {string} */ (tail)), focused: !!resolved && focus(editor) };
+    const tail = resolved && editor.textContent!.slice(chips[0].textContent!.length);
+    return { resolved: !!resolved && /^\s*$/.test(tail as string), focused: !!resolved && focus(editor) };
   }
   if (action === 'send') {
-    const tail = resolved && editor.textContent.slice(chips[0].textContent.length);
+    const tail = resolved && editor.textContent!.slice(chips[0].textContent!.length);
     const message = ticket.type === 'composer' ? `process exactly job ${ticket.job_id} as ${ticket.label}. Call gateway_exchange with worker_label=${JSON.stringify(ticket.label)}, request_id=${JSON.stringify(ticket.job_id)} and maximum_wait_seconds=1 to fetch this job only. Use these uploaded attachments with its request, submit its answer with request_id and claim_token, then stop when released.` : `wake up as ${ticket.label}`;
-    if (!resolved || !editor.textContent.startsWith(chips[0].textContent) || /** @type {string} */ (tail).trim() !== message) throw Error('mention_unconfirmed');
+    if (!resolved || !editor.textContent!.startsWith(chips[0].textContent!) || (tail as string).trim() !== message) throw Error('mention_unconfirmed');
     const send = form && one(form, 'button[data-testid="send-button"], button[aria-label="Send prompt"], button[aria-label="Send message"], button[aria-label="Send"]');
     if (ticket.type === 'composer') { if (!ownedFiles().ready) throw Error('upload_unconfirmed'); }
     else if (form && (attachmentRoots.length || all(form, 'img').length || fileInputs.some(el => el.files?.length))) throw Error('composer_not_empty');
-    if (!send || /** @type {HTMLButtonElement} */ (send).disabled || all(document, 'button[data-testid="stop-button"]').length || !focus(editor)) throw Error('send_unconfirmed');
+    if (!send || (send as HTMLButtonElement).disabled || all(document, 'button[data-testid="stop-button"]').length || !focus(editor)) throw Error('send_unconfirmed');
     return { ready: true };
   }
   throw Error('page_not_ready');

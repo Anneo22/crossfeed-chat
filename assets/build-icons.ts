@@ -1,13 +1,19 @@
 // Rasterise each native SVG without rescaling the 16/32 px pixel grids.
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+const { readFileSync, writeFileSync, mkdirSync } = fs;
+const { dirname, join, resolve } = path;
 const root = dirname(fileURLToPath(import.meta.url));
 if (!process.env.CROSSFEED_SHARP_PACKAGE) throw Error('Set CROSSFEED_SHARP_PACKAGE to the package.json that provides sharp');
 const require = createRequire(resolve(process.env.CROSSFEED_SHARP_PACKAGE));
 const sharp = require('sharp');
-const results = [];
+type RasterResult = {
+  file: string; width: number; height: number; transparentPixels: number; paintedPixels: number;
+  bounds: {left: number; top: number; right: number; bottom: number};
+};
+const results: RasterResult[] = [];
 for (const suffix of ['', '-dark']) {
   for (const size of [16, 32, 48, 128]) {
     const output = join(root, `icon-${size}${suffix}.png`);
@@ -16,7 +22,7 @@ for (const suffix of ['', '-dark']) {
     let clear = 0, painted = 0;
     let left=size, top=size, right=-1, bottom=-1;
     for (let y=0; y<size; y++) for (let x=0; x<size; x++) {
-      const alpha=data[(y*size+x)*4+3];
+      const alpha: number = data[(y*size+x)*4+3];
       if (!alpha) clear++;
       if (alpha) { painted++; left=Math.min(left,x); right=Math.max(right,x); top=Math.min(top,y); bottom=Math.max(bottom,y); }
     }

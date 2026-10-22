@@ -12,8 +12,8 @@ The committed exports need no design tools. To regenerate marks, icons and the l
 export CROSSFEED_SOURCE_SVG=/path/to/source-mark.svg
 export CROSSFEED_SHARP_PACKAGE=/path/to/package-with-sharp/package.json
 python3 assets/build.py
-node assets/build-icons.mjs
-node assets/build-preview.mjs
+node assets/build-icons.ts
+node assets/build-preview.ts
 ```
 
 Builders write inside `assets/`. Previews and `proofs/` are ignored. Copy regenerated light PNGs and `favicon.svg` into `extension/icons/`; update the favicon data URI in `src/oauth.ts` if its source changes.

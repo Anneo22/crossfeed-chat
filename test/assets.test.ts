@@ -48,8 +48,8 @@ test('asset builders produce stable vectors, native transparent rasters and an i
   const env = { CROSSFEED_CASTOR_SVG: inputs.castor, CROSSFEED_SOURCE_SVG: inputs.crossfeed, CROSSFEED_FONT_PAGE: inputs.font, CROSSFEED_SHARP_PACKAGE: inputs.sharp };
   const build = () => {
     run('python3', [path.join(assets, 'build.py')], env);
-    run(process.execPath, [path.join(assets, 'build-icons.mjs')], env);
-    run(process.execPath, [path.join(assets, 'build-preview.mjs')], env);
+    run(process.execPath, [path.join(assets, 'build-icons.ts')], env);
+    run(process.execPath, [path.join(assets, 'build-preview.ts')], env);
   };
   const before = snapshot(root);
   build(); const first = snapshot(root);

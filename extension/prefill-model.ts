@@ -1,26 +1,20 @@
+import type { PageTicket, PrefillModelResult } from './types.d.ts';
+
 /**
  * Re-observe (never change) the configured picker after an owned native-prefill
  * navigation. Serialized into the same document attested by prefillProbe.
- * @param {import('./types.js').PageTicket} ticket
- * @param {number} expectedMaximum
- * @param {number} [timeoutMs]
- * @param {number} [pollMs]
- * @returns {Promise<import('./types.js').PrefillModelResult>}
  */
-export async function prefillModel(ticket, expectedMaximum, timeoutMs = 1500, pollMs = 50) {
+export async function prefillModel(ticket: PageTicket, expectedMaximum: number, timeoutMs = 1500, pollMs = 50): Promise<PrefillModelResult> {
   const ownedDocument = document;
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
   const levels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
   const deadline = Math.min(ticket.expires_at, Date.now() + Math.max(1, Math.min(timeoutMs, 1500)));
-  /** @param {Element | null | undefined} el */
-  const text = el => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  /** @template {Element} E @param {E | null | undefined} el @returns {el is E} */
-  const visible = el => /** @type {boolean} */ (!!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility)));
-  /** @param {ParentNode} root @param {string} selector @returns {HTMLElement[]} */
-  const all = (root, selector) => /** @type {HTMLElement[]} */ ([...root.querySelectorAll(selector)].filter(visible));
+  const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
+  const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
   let phase = -1;
-  const authorized = () => {
+  const authorized = (): boolean => {
     if (document !== ownedDocument || Date.now() >= ticket.expires_at) return false;
     let url;
     try { url = new URL(location.href); } catch { return false; }
@@ -36,9 +30,8 @@ export async function prefillModel(ticket, expectedMaximum, timeoutMs = 1500, po
   const models = all(document, 'button[aria-label="Select ChatGPT model"], [data-testid="model-switcher-dropdown-button"]');
   if (models.length !== 1 || all(document, '[role="menu"]').length) return {verified: false, error: 'level_unconfirmed'};
   const model = models[0];
-  if (typeof model.click !== 'function' || model.getAttribute('aria-disabled') === 'true' || /** @type {HTMLButtonElement} */ (model).disabled) return {verified: false, error: 'level_unconfirmed'};
-  /** @type {HTMLElement | undefined} */
-  let ownedMenu;
+  if (typeof model.click !== 'function' || model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return {verified: false, error: 'level_unconfirmed'};
+  let ownedMenu: HTMLElement | undefined;
   try {
     model.click();
     while (Date.now() < deadline) {
@@ -49,7 +42,7 @@ export async function prefillModel(ticket, expectedMaximum, timeoutMs = 1500, po
         if (ownedMenu && ownedMenu !== menus[0]) return {verified: false, error: 'page_changed'};
         ownedMenu = menus[0];
         // An inactive picker track can still carry its actual selected row.
-        const rows = /** @type {HTMLElement[]} */ ([...ownedMenu.querySelectorAll('[role="menuitemradio"]')]);
+        const rows = [...ownedMenu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];
         const selected = rows.filter(row => row.getAttribute('aria-checked') === 'true');
         const sliders = all(ownedMenu, '[role="slider"]');
         if (selected.length === 1 && sliders.length === 1) {

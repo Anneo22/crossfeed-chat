@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const {default: crossfeedSession, beforeProviderHeaders} = await import(new URL('../integrations/pi-session.js', import.meta.url).href);
+const {default: crossfeedSession, beforeProviderHeaders} = await import(new URL('../integrations/pi-session.ts', import.meta.url).href);
 const event = (headers: Record<string, string> = {}) => ({type:'before_provider_headers', headers});
 
 const model = {id:'chatgpt:sol', baseUrl:'http://127.0.0.1:4319/v1'};

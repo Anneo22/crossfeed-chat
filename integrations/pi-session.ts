@@ -1,6 +1,6 @@
 const SESSION = /^[A-Za-z0-9._~-]{1,128}$/;
 
-function crossfeedModel(model) {
+function crossfeedModel(model: any): boolean {
   if (!model || typeof model.id !== 'string' || !model.id.startsWith('chatgpt:') || typeof model.baseUrl !== 'string') return false;
   if (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}\/v1$/.test(model.baseUrl)) return false;
   try {
@@ -13,10 +13,10 @@ function crossfeedModel(model) {
   }
 }
 
-export function beforeProviderHeaders(event, ctx) {
+export function beforeProviderHeaders(event: any, ctx: any): void {
   if (event?.type !== 'before_provider_headers' || !crossfeedModel(ctx?.model)) return;
   if (!event.headers || typeof event.headers !== 'object') throw Error('Crossfeed provider headers are unavailable');
-  const setSession = value => typeof event.headers.set === 'function' ? event.headers.set('X-Crossfeed-Session', value) : event.headers['X-Crossfeed-Session'] = value;
+  const setSession = (value: string) => typeof event.headers.set === 'function' ? event.headers.set('X-Crossfeed-Session', value) : event.headers['X-Crossfeed-Session'] = value;
   let session;
   try { session = ctx?.sessionManager?.getSessionId?.(); }
   catch { setSession(''); throw Error('Crossfeed requires a URL-safe Pi session ID'); }
@@ -24,6 +24,6 @@ export function beforeProviderHeaders(event, ctx) {
   setSession(session);
 }
 
-export default function crossfeedSession(pi) {
+export default function crossfeedSession(pi: any): void {
   pi.on('before_provider_headers', beforeProviderHeaders);
 }

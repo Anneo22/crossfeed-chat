@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prefillProbe, prefillWake, pagePermission } from '../extension/page.js';
+import { prefillProbe, prefillWake, pagePermission } from '../extension/page.ts';
 
 const globals: any = globalThis;
 const nonce = 'a'.repeat(32), label = 'research', connector = 'Crossfeed Chat';

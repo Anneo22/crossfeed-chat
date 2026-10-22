@@ -256,7 +256,7 @@ class BackgroundTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node unavailable")
     def test_vm_50ms_native_sampler(self):
         result = subprocess.run(
-            ["node", str(ROOT / "tests" / "kwin_sampler_vm.js"),
+            ["node", str(ROOT / "tests" / "kwin_sampler_vm.ts"),
              str(ROOT / "kwin_observer.js")],
             capture_output=True, text=True, timeout=5, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -1,16 +1,16 @@
 // Explicit ordinary gateway alias/nonce protocol: refresh the packaged entrypoint and modules.
-import { apiURL, clearOwnedWakeTabs, makePoller } from './core.js';
-import { ensurePairing } from './pairing.js';
+import { apiURL, clearOwnedWakeTabs, makePoller } from './core.ts';
+import { ensurePairing } from './pairing.ts';
+import type { PairingMessage, PairingResponse, Sender } from './types.d.ts';
 
 const poll = makePoller(chrome);
 const alarmName = 'crossfeed-fresh-chat-wake';
-/** @returns {Promise<void>} */
-async function setup() {
+async function setup(): Promise<void> {
   if (chrome.storage.local.setAccessLevel) await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
   await chrome.alarms.create(alarmName, {periodInMinutes: 0.5});
 }
 const ready = setup();
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: PairingMessage, sender: Sender, sendResponse: (response: PairingResponse) => void) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL('options.html') || message?.type !== 'pairing') return;
   void ready.then(async () => {
     if (message.apiURL !== undefined) {

@@ -1,13 +1,12 @@
-import { apiURL } from './core.js';
+import { apiURL } from './core.ts';
 
-const api = /** @type {HTMLInputElement} */ (document.querySelector('#api'));
-const status = /** @type {HTMLElement} */ (document.querySelector('#status'));
-const code = /** @type {HTMLElement} */ (document.querySelector('#code'));
+const api = document.querySelector('#api') as HTMLInputElement;
+const status = document.querySelector('#status') as HTMLElement;
+const code = document.querySelector('#code') as HTMLElement;
 if (chrome.storage.local.setAccessLevel) await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
 const saved = await chrome.storage.local.get(['apiURL']);
-if (apiURL(saved.apiURL)) api.value = /** @type {string} */ (saved.apiURL);
-/** @returns {Promise<void>} */
-async function refresh() {
+if (apiURL(saved.apiURL)) api.value = saved.apiURL as string;
+async function refresh(): Promise<void> {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'pairing' });
     code.textContent = result?.code ?? 'Waiting for the local server';
@@ -16,7 +15,7 @@ async function refresh() {
 }
 await refresh();
 setInterval(refresh, 5000);
-(/** @type {HTMLFormElement} */ (document.querySelector('#settings'))).addEventListener('submit', async event => {
+(document.querySelector('#settings') as HTMLFormElement).addEventListener('submit', async event => {
   event.preventDefault();
   if (!apiURL(api.value)) { status.textContent = 'Enter a loopback URL with a port.'; return; }
   try {

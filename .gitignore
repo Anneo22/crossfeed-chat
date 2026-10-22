@@ -1,6 +1,7 @@
 .scratch/
 node_modules
 dist
+extension/*.js
 CHANGES.log
 LIVE-RESULT-BRIDGE.md
 

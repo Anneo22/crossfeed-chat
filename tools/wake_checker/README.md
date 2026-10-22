@@ -14,7 +14,7 @@ python3 -m tools.wake_checker listen --duration 300 --status-url http://127.0.0.
 python3 -m tools.wake_checker listen --duration 300 --cdp-url http://127.0.0.1:9222
 python3 -m tools.wake_checker replay /path/to/sanitized/events.jsonl --output /tmp/a-new-replay-dir
 python3 -B -m unittest discover -s tools/wake_checker/tests -q
-node tools/wake_checker/tests/kwin_sampler_vm.js tools/wake_checker/kwin_observer.js
+node tools/wake_checker/tests/kwin_sampler_vm.ts tools/wake_checker/kwin_observer.js
 node --check tools/wake_checker/kwin_observer.js
 npm run test:wake-checker
 npm run check

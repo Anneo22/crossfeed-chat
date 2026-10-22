@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import type { PollBrowser, PageTicket } from '../extension/types.d.ts';
 // The fixtures intentionally install partial browser and DOM objects.
 const globals: any = globalThis;
-import { makePoller, validTicket } from '../extension/core.js';
-import { pageWake } from '../extension/page.js';
+import { makePoller, validTicket } from '../extension/core.ts';
+import { pageWake } from '../extension/page.ts';
 import { Wakes } from '../src/wake.ts';
 
 const attachment = (name = 'diagram.png') => ({id: 'file1', name, path: `/private/state/files/file1/${name}`, mime: 'image/png', bytes: 100});

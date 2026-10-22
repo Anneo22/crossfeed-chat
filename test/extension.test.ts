@@ -4,8 +4,8 @@ import type { PollBrowser, Fetcher } from '../extension/types.d.ts';
 // The fixtures intentionally install partial browser and DOM objects.
 const globals: any = globalThis;
 import { readFile } from 'node:fs/promises';
-import { apiURL, savedChatURL, validTicket, request, makePoller, archiveConversation, isWakeSignature, firstUserText, sweepWakeChats, closeOrphanedWakeTabs, clearOwnedWakeTabs } from '../extension/core.js';
-import { pageWake, prefillProbe, prefillModel, prefillWake, pagePermission } from '../extension/page.js';
+import { apiURL, savedChatURL, validTicket, request, makePoller, archiveConversation, isWakeSignature, firstUserText, sweepWakeChats, closeOrphanedWakeTabs, clearOwnedWakeTabs } from '../extension/core.ts';
+import { pageWake, prefillProbe, prefillModel, prefillWake, pagePermission } from '../extension/page.ts';
 
 const ticket = () => ({nonce: 'a'.repeat(32), label: 'research', connector: 'Crossfeed Chat', wake_mode: 'native' as const,
   row: 'GPT-6', level: 3, expires_at: Date.now() + 60_000});
@@ -55,7 +55,7 @@ test('private legacy bootstrap stays packaged and validates one exact 128-bit ti
   const html = await readFile(new URL('../extension/wake-window.html', import.meta.url), 'utf8');
   assert.match(html, /<script src="wake-window\.js" defer><\/script>/);
   assert.match(html, /<meta name="referrer" content="no-referrer">/);
-  const source = await readFile(new URL('../extension/wake-window.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../extension/wake-window.ts', import.meta.url), 'utf8');
   const hydrate = new Function('URL','location','document',source);
   const root = 'chrome-extension://' + 'a'.repeat(32) + '/wake-window.html';
   const marker = 'f'.repeat(32);

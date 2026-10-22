@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {pageWake} from '../extension/page.js';
+import {pageWake} from '../extension/page.ts';
 const globals: any = globalThis;
 const ticket = {nonce: 'a'.repeat(32), label: 'sol', connector: 'crossfeed', row: 'Latest', level: 1, expires_at: Date.now() + 60000};
 

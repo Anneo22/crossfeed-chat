@@ -14,7 +14,7 @@ test('background restricts storage before automatic polling and gates lifecycle 
     alarms: { create: async (...args: any[]) => events.push(args), onAlarm: { addListener: (f: any) => { listeners.alarm = f; } } },
     runtime: { id: 'a'.repeat(32), getURL: (path: string) => 'chrome-extension://' + 'a'.repeat(32) + '/' + path, onMessage: { addListener: (f: any) => { listeners.message = f; } }, onInstalled: { addListener: (f: any) => { listeners.install = f; } }, onStartup: { addListener: (f: any) => { listeners.start = f; } } },
   };
-  await import('../extension/background.js' + '?success');
+  await import('../extension/background.ts' + '?success');
   listeners.install(); listeners.start(); listeners.alarm({ name: 'other' });
   assert.equal(events.length, 1); unlock(); await settle();
   assert.deepEqual(events[0], { accessLevel: 'TRUSTED_CONTEXTS' });
@@ -34,7 +34,7 @@ test('background setup rejection prevents polling', async t => {
   const old = globals.chrome; t.after(() => { globals.chrome = old; });
   let poll = 0, listener: any;
   globals.chrome = { storage: { local: { setAccessLevel: async () => { throw Error('refused'); }, get: async () => { poll++; } } }, alarms: { create: async () => assert.fail('no alarm after failure'), onAlarm: { addListener() {} } }, runtime: { onMessage:{addListener(){}}, onInstalled: { addListener: (f: any) => { listener = f; } }, onStartup: { addListener() {} } } };
-  await import('../extension/background.js' + '?failure'); listener(); await settle(); assert.equal(poll, 0);
+  await import('../extension/background.ts' + '?failure'); listener(); await settle(); assert.equal(poll, 0);
 });
 test('options exposes only API URL, pairing code and status and requests pairing through the background', async t => {
   const previous = { chrome: globals.chrome, document: globals.document, setInterval: globals.setInterval };
@@ -46,7 +46,7 @@ test('options exposes only API URL, pairing code and status and requests pairing
     storage: { local: { setAccessLevel: async () => {}, get: async (names: any) => { assert.deepEqual(names, ['apiURL']); return { apiURL: 'http://127.0.0.1:4319' }; } } },
     runtime: { sendMessage: async (value: any) => { if(fail) throw Error('private detail'); messages.push(value); return {state:'pending',code:'ABCD-0123'}; } },
   };
-  await import('../extension/options.js'); assert.equal(api.value, 'http://127.0.0.1:4319'); assert.equal(code.textContent, 'ABCD-0123');
+  await import('../extension/options.ts'); assert.equal(api.value, 'http://127.0.0.1:4319'); assert.equal(code.textContent, 'ABCD-0123');
   assert.match(status.textContent, /Waiting for approval/);
   const event = { preventDefault() {} }; api.value = 'https://evil.example'; await submit(event); assert.equal(messages.length, 1);
   api.value = 'http://127.0.0.1:4321'; await submit(event); assert.deepEqual(messages[1], {type:'pairing',apiURL:api.value});
