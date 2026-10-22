@@ -10,7 +10,7 @@ It runs on macOS and Linux, and works alone or with [Crossfeed Orchestrator](htt
 
 ## How it does at coding
 
-In a 12-task coding trial on 5 October 2026, scored by independent checks, ChatGPT through Pi passed 9 of 11 measured tasks at High and 9 of 10 at Extra High, against 12 of 12 for Codex Sol High. Median times were 341 seconds for ChatGPT High and 232 for Sol High. Use Codex when its allowance is there, and ChatGPT when you want a second, separate allowance.
+We measured it with the [Crossfeed Orchestrator measurement suite](https://github.com/ABCastor/crossfeed-orchestrator/tree/main/bench), which scores coding agents on fix, implement, review, repository-question, reasoning and extraction tasks at four difficulty levels, with hidden checks. On 12 of its tasks (5 October 2026), ChatGPT through Pi passed 9 of 11 measured tasks at High and 9 of 10 at Extra High, against 12 of 12 for Codex Sol High. Median times were 341 seconds for ChatGPT High and 232 for Sol High. Use Codex when its allowance is there, and ChatGPT when you want a second, separate allowance.
 
 A ChatGPT chat repairs a failing test with the local workbench:
 
@@ -65,6 +65,4 @@ The tests run the production handlers, OAuth isolation, attachments, persistence
 
 ## Licence
 
-[Apache 2.0](LICENSE), with third-party notices in [NOTICE](NOTICE). The name, marks and signature artwork are outside the licence.
-
-<p><a href="https://abcastor.com"><img src="docs/castor-footer.svg" width="350" alt="Chip, the Castor beaver, Castor, we give a dam"></a></p>
+[Apache 2.0](LICENSE), with third-party notices in [NOTICE](NOTICE). The name and logo are outside the licence.
