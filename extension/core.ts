@@ -857,7 +857,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         return {maximum, position, state: candidate};
       };
       const settlePicker = async (expectedPosition: number | undefined, expectedMaximum: number | undefined) => {
-        const deadline = Math.min(activeTicket.expires_at, now() + 1000);
+        const deadline = Math.min(activeTicket.expires_at, now() + 5000);
         while (now() < deadline) {
           const candidate = await read('picker');
           const canonical = canonicalPicker(candidate, expectedPosition, expectedMaximum);
@@ -870,7 +870,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       if (activeTicket.level > initial.maximum) throw Error('level_unconfirmed');
       /** Once row/range authority exists, never settle through a mutation. */
       const settledAuthority = async (expectedPosition: number) => {
-        const deadline = Math.min(activeTicket.expires_at, now() + 1000);
+        const deadline = Math.min(activeTicket.expires_at, now() + 5000);
         while (now() < deadline) {
           const candidate = await read('picker');
           if (candidate.row !== activeTicket.row || candidate.minimum !== '0' ||

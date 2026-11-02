@@ -77,7 +77,7 @@ test('private legacy bootstrap stays packaged and validates one exact 128-bit ti
 
 function workerFixture(options: Record<string, any> = {}) {
   const events: any[] = [];
-  let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0, rootLoads = 0, pickerClicks = 0;
+  let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0, rootLoads = 0, pickerClicks = 0, previousPosition = position, lastKeyAt = -Infinity;
   const value: any = {...ticket(), ...(Object.hasOwn(options, 'wakeMode') ? {wake_mode: options.wakeMode} : {}), ...(options.composer ? {type: 'composer', job_id: 'job_1', attachments: [{name: 'x.txt', path: '/tmp/x.txt', mime: 'text/plain', bytes: 1}]} : {}), ...(options.ticket ?? {}), expires_at: clock + 240000}, point = (n: any) => ({x: n, y: n});
   const fetcher = async (url: any, init: any) => {
     const path = new URL(url).pathname, body = init.body && JSON.parse(init.body);
@@ -188,6 +188,7 @@ function workerFixture(options: Record<string, any> = {}) {
           if (params.x === 6 && ++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
+          if (['ArrowLeft', 'ArrowRight'].includes(params.key)) { previousPosition = position; lastKeyAt = clock; }
           if (params.key === 'ArrowLeft') position = Math.max(0, position - 1);
           if (params.key === 'ArrowRight') position = Math.min(4, position + 1);
           if (params.key === 'Escape') pickerOpen = false;
@@ -234,7 +235,8 @@ function workerFixture(options: Record<string, any> = {}) {
       if (['modelFocus', 'sliderFocus', 'editorFocus'].includes(action)) result = {focused: action !== 'modelFocus' || !options.modelFocusRefused, ...(action === 'modelFocus' ? {modelPoint: options.modelPointMissing ? null : point(6)} : {})};
       if (action === 'picker') {
         const names = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
-        result = {open: pickerOpen, row, rowPoint: options.hidden && !events.some(e => e.params?.x === 3 && e.params.type === 'mouseReleased') ? null : point(2), viewPoint: point(3), minimum: '0', maximum: options.badSlider ? '5' : '4', position, status: `${names[position]}, ${position + 1} of 5.`};
+        const announced = clock - lastKeyAt < (options.statusLagMs ?? 0) ? previousPosition : position;
+        result = {open: pickerOpen, row, rowPoint: options.hidden && !events.some(e => e.params?.x === 3 && e.params.type === 'mouseReleased') ? null : point(2), viewPoint: point(3), minimum: '0', maximum: options.badSlider ? '5' : '4', position, status: `${names[announced]}, ${announced + 1} of 5.`};
       }
       if (action === 'mention') result = {mentionPoint: options.unresolved ? null : point(4)};
       if (action === 'resolved') result = {resolved: pendingMention, focused: pendingMention};
@@ -303,6 +305,13 @@ test('configured picker activates the loaded renderer and retries ignored initia
   assert(loaded >= 0 && emulated > loaded);
   assert.equal(f.events.filter(e => e.params?.x === 6 && e.params.type === 'mouseReleased').length, 2);
   assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+  assert.equal(prefillCount(f), 1);
+});
+
+test('configured picker waits for delayed level announcements without weakening the receipt', async () => {
+  const f = workerFixture({wakeMode: 'configured', statusLagMs: 1500, ticket: {level: 4}}); await run(f);
+  assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+  assert.deepEqual(f.events.find(e => e.path === '/extension/observe')?.body?.picker_receipt, {row: 'GPT-6', level: 4});
   assert.equal(prefillCount(f), 1);
 });
 
