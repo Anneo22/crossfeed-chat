@@ -427,7 +427,11 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
   const pageScript = (options: any, ms = 20000): Promise<any> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([
-      browser.scripting.executeScript(options),
+      // ChatGPT can keep the document loading while its tool stream polls.
+      // Chrome's default document_idle injection then waits beyond our timeout.
+      // Each probe/sender already binds and validates its own DOM authority;
+      // run it now rather than waiting for unrelated resource/network idleness.
+      browser.scripting.executeScript({...options, injectImmediately: true}),
       new Promise((_, reject) => { timer = setTimeout(() => reject(Error('page_not_ready')), ms); }),
     ]).finally(() => clearTimeout(timer));
   };

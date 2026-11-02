@@ -197,6 +197,7 @@ function workerFixture(options: Record<string, any> = {}) {
       },
     },
     scripting: {executeScript: async (opts: any) => {
+      events.push({injection: {immediate: opts.injectImmediately, action: opts.func.name, args: opts.args}});
       assert(!JSON.stringify(opts.args).includes('e'.repeat(43)));
       if (opts.func === prefillProbe) {
         events.push({probe: {target: opts.target, args: opts.args}});
@@ -663,6 +664,18 @@ test('sent ordinary wake without exact gateway contact expires and closes its ta
   const f = workerFixture({noContact: true}); await run(f);
   assert.equal(prefillCount(f), 1); assert.equal(f.events.find(e => e.path === '/extension/result').body.ok, false);
   assert.equal(f.events.some(e => e.remove === 7), true);
+});
+
+test('busy ChatGPT documents receive immediate DOM probes instead of waiting for document idle', async () => {
+  for (const wakeMode of ['native', 'configured']) {
+    const f = workerFixture({wakeMode, allow: true}); await run(f);
+    const injections = f.events.filter(e => e.injection);
+    assert(injections.some(e => e.injection.args[1] === 'registration'));
+    assert(injections.every(e => e.injection.immediate === true));
+    assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+    assert.equal(prefillCount(f), 1);
+    assert.equal(enterCount(f), 0);
+  }
 });
 
 test('a later post-send registration document replacement fails without another send', async () => {

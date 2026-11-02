@@ -135,6 +135,7 @@ export interface PollBrowser {
     executeScript<A extends unknown[], R>(options: {
       target: ScriptTarget;
       world?: 'MAIN';
+      injectImmediately?: boolean;
       func: (...args: A) => R;
       args: A;
     }): Promise<Injection<Awaited<R>>[]>;
