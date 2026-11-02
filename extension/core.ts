@@ -753,8 +753,6 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       }
 
       await browser.debugger.attach({tabId: activeTab.id}, '1.3'); attached = true;
-      // Trusted input into our background composer tab needs an active renderer.
-      await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});
       const read = async (action: PageAction): Promise<PageProbe> => {
         stage = action;
         if (!validTicket(activeTicket, now())) throw Error('expired');
@@ -809,6 +807,9 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         if (current.url && !['about:blank', home].includes(current.url) || current.pendingUrl && current.pendingUrl !== home) throw Error('page_changed');
         await pause(200);
       }
+      // Activate the loaded renderer, not the transient document it replaced.
+      // Hidden worker tabs need this for trusted pointer and keyboard input.
+      await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});
       let state = await wait('ready', r => r.ready);
       // Bare-root drafts can be restored/shared by ChatGPT. Ordinary wakes
       // configure only the picker here; never focus, clear or type into a draft.
@@ -821,13 +822,22 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       }
       if (!state.chat) { await click(state.chatPoint); await wait('ready', r => r.chat); }
       const openPicker = async (): Promise<PageProbe> => {
-        const current = await read('picker');
-        if (current.open) return current;
-        const model = await read('modelFocus');
-        // Pointer input does not require keyboard focus. ChatGPT can refuse
-        // programmatic focus while its unique visible model button is clickable.
-        // click validates the point; the menu and picker receipt remain authority.
-        await click(model.modelPoint); return wait('picker', r => r.open);
+        const deadline = Math.min(activeTicket.expires_at, now() + 5000);
+        let nextClickAt = 0;
+        while (now() < deadline) {
+          const current = await read('picker');
+          if (current.open) return current;
+          if (now() >= nextClickAt) {
+            const model = await read('modelFocus');
+            // Pointer input does not require keyboard focus. The home shell can
+            // refuse focus or ignore initial input while its controls settle.
+            // Only retry opening the picker, never a message or a level change.
+            await click(model.modelPoint);
+            nextClickAt = now() + 1000;
+          }
+          await pause(100);
+        }
+        throw Error('page_not_ready');
       };
       state = await openPicker();
       if (state.row !== activeTicket.row) {

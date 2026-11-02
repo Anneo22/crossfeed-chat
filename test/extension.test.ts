@@ -77,7 +77,7 @@ test('private legacy bootstrap stays packaged and validates one exact 128-bit ti
 
 function workerFixture(options: Record<string, any> = {}) {
   const events: any[] = [];
-  let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0;
+  let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0, rootLoads = 0, pickerClicks = 0;
   const value: any = {...ticket(), ...(Object.hasOwn(options, 'wakeMode') ? {wake_mode: options.wakeMode} : {}), ...(options.composer ? {type: 'composer', job_id: 'job_1', attachments: [{name: 'x.txt', path: '/tmp/x.txt', mime: 'text/plain', bytes: 1}]} : {}), ...(options.ticket ?? {}), expires_at: clock + 240000}, point = (n: any) => ({x: n, y: n});
   const fetcher = async (url: any, init: any) => {
     const path = new URL(url).pathname, body = init.body && JSON.parse(init.body);
@@ -132,6 +132,10 @@ function workerFixture(options: Record<string, any> = {}) {
             pendingUrl:options.bootstrapPendingForeign ? 'https://evil.example/' : createdURL};
         }
         if (createdURL?.startsWith('chrome-extension://') && !sent) return {id:7,windowId:options.tabWindowId ?? 8,status:'complete',url:options.bootstrapForeign ? 'https://evil.example/' : createdURL,title:options.bootstrapNeverReady ? 'Loading' : 'Crossfeed Wake '+new URL(createdURL).searchParams.get('marker')};
+        if (options.initialRootLoading && !sent && !events.some(e => e.update)) {
+          if (++rootLoads < 3) return {id: 7, windowId: 8, status: 'loading', url: 'https://chatgpt.com/'};
+          if (rootLoads === 3) events.push({rootLoaded: true});
+        }
         const createdWake = typeof createdURL === 'string' ? new URL(createdURL) : null;
         const phrase = createdWake?.searchParams.get('q') ?? ordinaryPrompt(value);
         const wake = createdWake?.searchParams.has('q') ? createdURL : 'https://chatgpt.com/?q=' + encodeURIComponent(phrase);
@@ -181,7 +185,7 @@ function workerFixture(options: Record<string, any> = {}) {
           if (params.x === 4) pendingMention = true;
           if (params.x === 5) { if (options.linger) options.approvedLinger = 3; else options.allow = false; }
           if (params.x === 7) options.menuOpen = true;
-          if (params.x === 6 && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
+          if (params.x === 6 && ++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
           if (params.key === 'ArrowLeft') position = Math.max(0, position - 1);
@@ -290,6 +294,16 @@ test('configured picker uses its verified pointer target even when programmatic 
   assert.equal(f.events.some(e => e.path === '/extension/observe'), true);
   assert.equal(prefillCount(f), 1);
   assert.equal(enterCount(f), 0);
+});
+
+test('configured picker activates the loaded renderer and retries ignored initial input', async () => {
+  const f = workerFixture({wakeMode: 'configured', modelFocusRefused: true, initialRootLoading: true, ignoredPickerClicks: 1}); await run(f);
+  const loaded = f.events.findIndex(e => e.rootLoaded);
+  const emulated = f.events.findIndex(e => e.method === 'Emulation.setFocusEmulationEnabled');
+  assert(loaded >= 0 && emulated > loaded);
+  assert.equal(f.events.filter(e => e.params?.x === 6 && e.params.type === 'mouseReleased').length, 2);
+  assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+  assert.equal(prefillCount(f), 1);
 });
 
 test('configured picker still refuses a missing pointer target or a menu that never opens', async () => {
