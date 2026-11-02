@@ -58,8 +58,12 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
           const exactRow = text(row) === ticket.row || all(row, 'span').some(span => text(span) === ticket.row);
           const position = slider.getAttribute('aria-valuenow');
           const status = all(ownedMenu, '[role="status"]').map(text).filter(value => / of /i.test(value));
-          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum) || position !== String(ticket.level) || status.length !== 1 || status[0] !== `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`) return {verified: false, error: 'level_unconfirmed'};
-          return {verified: true, row: ticket.row, level: ticket.level, maximum: expectedMaximum};
+          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum) || position !== String(ticket.level)) return {verified: false, error: 'level_unconfirmed'};
+          // aria-live announcements hydrate independently of the selected thumb.
+          // As in the initial picker proof, wait for exact agreement, never
+          // change the level or accept a stale/missing announcement as proof.
+          if (status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
+            return {verified: true, row: ticket.row, level: ticket.level, maximum: expectedMaximum};
         }
       }
       await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
