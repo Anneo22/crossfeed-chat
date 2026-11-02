@@ -824,7 +824,9 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         const current = await read('picker');
         if (current.open) return current;
         const model = await read('modelFocus');
-        if (!model.focused) throw Error('page_not_ready');
+        // Pointer input does not require keyboard focus. ChatGPT can refuse
+        // programmatic focus while its unique visible model button is clickable.
+        // click validates the point; the menu and picker receipt remain authority.
         await click(model.modelPoint); return wait('picker', r => r.open);
       };
       state = await openPicker();

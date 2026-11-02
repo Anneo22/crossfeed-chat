@@ -181,7 +181,7 @@ function workerFixture(options: Record<string, any> = {}) {
           if (params.x === 4) pendingMention = true;
           if (params.x === 5) { if (options.linger) options.approvedLinger = 3; else options.allow = false; }
           if (params.x === 7) options.menuOpen = true;
-          if (params.x === 6) pickerOpen = !pickerOpen;
+          if (params.x === 6 && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
           if (params.key === 'ArrowLeft') position = Math.max(0, position - 1);
@@ -227,7 +227,7 @@ function workerFixture(options: Record<string, any> = {}) {
       const action = opts.args[1]; events.push({action, target: opts.target});
       let result = {};
       if (action === 'ready') result = {ready: true, chat, empty: !options.occupied, chatPoint: point(1)};
-      if (['modelFocus', 'sliderFocus', 'editorFocus'].includes(action)) result = {focused: true, ...(action === 'modelFocus' ? {modelPoint: point(6)} : {})};
+      if (['modelFocus', 'sliderFocus', 'editorFocus'].includes(action)) result = {focused: action !== 'modelFocus' || !options.modelFocusRefused, ...(action === 'modelFocus' ? {modelPoint: options.modelPointMissing ? null : point(6)} : {})};
       if (action === 'picker') {
         const names = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
         result = {open: pickerOpen, row, rowPoint: options.hidden && !events.some(e => e.params?.x === 3 && e.params.type === 'mouseReleased') ? null : point(2), viewPoint: point(3), minimum: '0', maximum: options.badSlider ? '5' : '4', position, status: `${names[position]}, ${position + 1} of 5.`};
@@ -282,6 +282,25 @@ for (const wakeMode of [undefined, 'configured']) {
     assert.equal(f.events.find((e: any) => e.path === '/extension/result')?.body?.ok, true);
   });
 }
+
+test('configured picker uses its verified pointer target even when programmatic focus is refused', async () => {
+  const f = workerFixture({wakeMode: 'configured', modelFocusRefused: true}); await run(f);
+  assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+  assert.equal(f.events.some(e => e.params?.x === 6 && e.params.type === 'mouseReleased'), true);
+  assert.equal(f.events.some(e => e.path === '/extension/observe'), true);
+  assert.equal(prefillCount(f), 1);
+  assert.equal(enterCount(f), 0);
+});
+
+test('configured picker still refuses a missing pointer target or a menu that never opens', async () => {
+  for (const options of [{modelPointMissing: true}, {pickerNeverOpens: true}]) {
+    const f = workerFixture({wakeMode: 'configured', modelFocusRefused: true, ...options}); await run(f);
+    assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, false);
+    assert.equal(prefillCount(f), 0);
+    assert.equal(enterCount(f), 0);
+    assert.equal(f.events.some(e => e.path === '/extension/observe'), false);
+  }
+});
 
 test('configured ordinary wake tolerates a restored root draft without typing or clearing it', async () => {
   const f = workerFixture({wakeMode: 'configured', occupied: true}); await run(f);
