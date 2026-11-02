@@ -58,11 +58,14 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
           const exactRow = text(row) === ticket.row || all(row, 'span').some(span => text(span) === ticket.row);
           const position = slider.getAttribute('aria-valuenow');
           const status = all(ownedMenu, '[role="status"]').map(text).filter(value => / of /i.test(value));
-          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum) || position !== String(ticket.level)) return {verified: false, error: 'level_unconfirmed'};
+          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum)) return {verified: false, error: 'level_unconfirmed'};
+          // Native navigation can hydrate the previous thumb before the saved
+          // preference arrives. Observe only: never repair it or send on a
+          // mismatch, and refuse if exact agreement does not arrive in time.
           // aria-live announcements hydrate independently of the selected thumb.
           // As in the initial picker proof, wait for exact agreement, never
           // change the level or accept a stale/missing announcement as proof.
-          if (status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
+          if (position === String(ticket.level) && status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
             return {verified: true, row: ticket.row, level: ticket.level, maximum: expectedMaximum};
         }
       }

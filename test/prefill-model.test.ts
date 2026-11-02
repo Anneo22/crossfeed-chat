@@ -6,12 +6,12 @@ const globals: any = globalThis;
 const ticket = () => ({nonce:'a'.repeat(32),label:'wake-'+'a'.repeat(32),connector:'Crossfeed Chat',row:'Latest',level:2,expires_at:Date.now()+60000});
 const prompt = (t:ReturnType<typeof ticket>) => `@${t.connector} wake up. First gateway_exchange: worker_label=${JSON.stringify(t.label)} exactly as issued, wake_nonce=${JSON.stringify(t.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(t.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
 function fixture(options:Record<string,any>={}) {
-  let open=false, clicks=0, modelReads=0, statusReads=0;
+  let open=false, clicks=0, modelReads=0, statusReads=0, sliderReads=0;
   const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[]});
   const row=node(options.row??'Latest',{'aria-checked':'true'});
   const slider=node('',{'aria-valuemin':options.minimum??'0','aria-valuemax':options.maximum??'2','aria-valuenow':options.position??'2'});
   const status=node(options.status??'High, 3 of 3.');
-  const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[slider]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
+  const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
   const model=node('',options.disabled?{'aria-disabled':'true'}:{});
   model.click=()=>{clicks++;open=!open;if(options.foreignAfterClick)globals.location.href='https://evil.example/';};
   const doc={querySelectorAll:(selector:string)=>selector.includes('model-switcher')?(options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model]):selector==='[role="menu"]'&&open?(options.duplicateMenu?[menu,menu]:[menu]):[]};
@@ -33,6 +33,10 @@ test('configured model proof waits for the picker trigger after the composer has
 test('configured Pro proof waits for the native picker announcement to catch up',async()=>{
   const value=await run({level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',statusLagReads:2,staleStatus:'Extra High, 4 of 5.',timeoutMs:500});
   assert.deepEqual(value,{result:{verified:true,row:'Latest',level:4,maximum:4},clicks:2});
+});
+test('configured native proof waits for a hydrated old thumb to settle to the requested level',async()=>{
+  const value=await run({positionLagReads:2,stalePosition:'1',timeoutMs:500});
+  assert.deepEqual(value,{result:{verified:true,row:'Latest',level:2,maximum:2},clicks:2});
 });
 test('configured model proof never clicks when the trigger stays missing',async()=>{
   const value=await run({noModel:true});assert.equal(value.result.verified,false);assert.equal(value.clicks,0);
