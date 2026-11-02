@@ -4,12 +4,12 @@ import type { PageTicket, PrefillModelResult } from './types.d.ts';
  * Re-observe (never change) the configured picker after an owned native-prefill
  * navigation. Serialized into the same document attested by prefillProbe.
  */
-export async function prefillModel(ticket: PageTicket, expectedMaximum: number, timeoutMs = 1500, pollMs = 50): Promise<PrefillModelResult> {
+export async function prefillModel(ticket: PageTicket, expectedMaximum: number, timeoutMs = 5000, pollMs = 50): Promise<PrefillModelResult> {
   const ownedDocument = document;
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
   const levels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
-  const deadline = Math.min(ticket.expires_at, Date.now() + Math.max(1, Math.min(timeoutMs, 1500)));
+  const deadline = Math.min(ticket.expires_at, Date.now() + Math.max(1, Math.min(timeoutMs, 5000)));
   const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
   const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
   const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
@@ -27,9 +27,17 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
   };
   if (ticket.type === 'composer' || ticket.wake_mode === 'native' || !Number.isInteger(expectedMaximum) || expectedMaximum < 0 || expectedMaximum > 4 || !Number.isInteger(ticket.level) || ticket.level < 0 || ticket.level > expectedMaximum) return {verified: false, error: 'level_unconfirmed'};
   if (!authorized()) return {verified: false, error: 'page_changed'};
-  const models = all(document, 'button[aria-label="Select ChatGPT model"], [data-testid="model-switcher-dropdown-button"]');
-  if (models.length !== 1 || all(document, '[role="menu"]').length) return {verified: false, error: 'level_unconfirmed'};
-  const model = models[0];
+  // The exact prefilled composer can hydrate before its model control. Missing
+  // UI is not a model mismatch; wait in the same authorized document, bounded.
+  let model: HTMLElement | undefined;
+  while (Date.now() < deadline) {
+    if (!authorized()) return {verified: false, error: 'page_changed'};
+    const models = all(document, 'button[aria-label="Select ChatGPT model"], [data-testid="model-switcher-dropdown-button"]');
+    if (models.length > 1 || all(document, '[role="menu"]').length) return {verified: false, error: 'level_unconfirmed'};
+    if (models.length === 1) { model = models[0]; break; }
+    await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
+  }
+  if (!model) return {verified: false, error: 'level_unconfirmed'};
   if (typeof model.click !== 'function' || model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return {verified: false, error: 'level_unconfirmed'};
   let ownedMenu: HTMLElement | undefined;
   try {
