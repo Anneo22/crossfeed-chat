@@ -36,7 +36,7 @@ interface WakeOptions {
 interface WakeInput { nonce: string; picker_receipt?: PickerReceipt; ok?: boolean; url?: string; error?: string; stage?: string; permissions?: {connector: string; option: string}[] }
 // Store only fixed diagnostic identifiers, never page text or browser errors.
 const failureCodes = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mode_unconfirmed', 'level_unconfirmed', 'level_unavailable', 'permission_unconfirmed', 'upload_unconfirmed', 'upload_failed', 'composer_not_empty', 'mention_unconfirmed', 'send_unconfirmed', 'claim_refused', 'expired', 'browser_error', 'rate_limited']);
-const failureStages = new Set(['loading', 'create', 'attach', 'activate', 'load', 'upload', 'enter', 'observe', 'result', 'claim', 'input', 'ready', 'registration', 'modelFocus', 'picker', 'sliderFocus', 'editorFocus', 'mention', 'resolved', 'send', 'uploadInput', 'uploads']);
+const failureStages = new Set(['loading', 'create', 'attach', 'activate', 'load', 'upload', 'enter', 'observe', 'result', 'claim', 'input', 'ready', 'registration', 'modelFocus', 'picker', 'prefillModel', 'sliderFocus', 'editorFocus', 'mention', 'resolved', 'send', 'uploadInput', 'uploads']);
 export class Wakes {
   declare config: WakeConfig; declare now: () => number; declare save: (config: WakeConfig) => void; declare contact: (name: string) => number; declare active: (name: string) => boolean;
   declare failed: (name: string, jobId?: string, identity?: string) => void; declare jobContact: (id: string | undefined) => boolean; declare jobFinished: (id: string | undefined) => boolean;

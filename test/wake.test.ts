@@ -160,6 +160,12 @@ test('wake status retains only bounded failure identifiers, including late expir
   assert(!JSON.stringify(f.wakes.status()).includes('private-browser-detail'));
 });
 
+test('wake status distinguishes a post-navigation model proof failure', () => {
+  const f = fixture(), t = f.begin();
+  f.wakes.result({nonce: t!.nonce, ok: false, error: 'level_unconfirmed', stage: 'prefillModel'});
+  assert.equal(f.wakes.status()[0].failure_stage, 'prefillModel');
+});
+
 test('daily cap is durable and charged at issue rather than enqueue', () => {
   const f = fixture({wake_daily_cap: 1}); const first = f.begin(); f.confirm(first);
   const restarted = new Wakes(f.config, f.now); restarted.enqueue('other');

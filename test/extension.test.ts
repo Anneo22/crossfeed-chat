@@ -345,6 +345,13 @@ test('configured prefill refuses changed model or document before its single sen
   }
 });
 
+test('configured prefill model failures are distinct from initial picker failures', async () => {
+  const f = workerFixture({wakeMode: 'configured', postPrefillModelMismatch: true}); await run(f);
+  assert(f.events.some(e => e.path === '/extension/observe'));
+  assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.stage, 'prefillModel');
+  assert.equal(prefillCount(f), 0);
+});
+
 test('configured prefill seals uncertain execution, closes its owned tab and never resends', async () => {
   const f = workerFixture({wakeMode: 'configured', occupied: true, lostExecutionReply: true}); await run(f);
   assert.equal(prefillCount(f), 1);

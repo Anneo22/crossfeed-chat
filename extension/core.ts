@@ -639,7 +639,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         if (expectedMaximum !== undefined) {
           // A configured wake must retain the actual saved picker selection
           // across native navigation; never silently fall back to defaults.
-          stage = 'picker';
+          stage = 'prefillModel';
           const modelArgs: [PageTicket, number, number] = [pageTicket, expectedMaximum, Math.max(1, Math.min(5000, activeTicket.expires_at - now()))];
           const modelRuns: Injection<PrefillModelResult>[] = await pageScript({
             target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args: modelArgs,
