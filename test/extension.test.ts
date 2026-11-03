@@ -171,7 +171,7 @@ function workerFixture(options: Record<string, any> = {}) {
         }
         return {id: 7, windowId: options.tabWindowId ?? 8, status: 'complete', url: 'https://chatgpt.com/c/new'};
       },
-      update: async (id:any, opts:any) => {events.push({update:{id,...opts}});return {id,windowId:8,url:opts.url};},
+      update: async (id:any, opts:any) => {options.prefillFocused = false; events.push({update:{id,...opts}});return {id,windowId:8,url:opts.url};},
       remove: async (id: any) => events.push({remove: id}),
     },
     tabGroups: {update: async (id: any, opts: any) => events.push({groupUpdate: {id, ...opts}})},
@@ -180,6 +180,7 @@ function workerFixture(options: Record<string, any> = {}) {
       detach: async () => events.push({detach: true}),
       sendCommand: async (_: any, method: string, params: any) => {
         events.push({method, params});
+        if (method === 'Emulation.setFocusEmulationEnabled') options.prefillFocused = true;
         if (method === 'Input.dispatchMouseEvent' && params.type === 'mouseReleased') {
           if (params.x === 1) chat = true;
           if (params.x === 2) row = value.row;
@@ -215,6 +216,8 @@ function workerFixture(options: Record<string, any> = {}) {
       if (opts.func === prefillModel) {
         events.push({modelProof: {target: opts.target, args: opts.args}});
         const isPoint = opts.args[4] === 'point';
+        if (options.prefillRequiresFocus && !options.prefillFocused) return [{documentId: 'prefill-document',
+          result: {verified: false, error: 'level_unconfirmed', diagnostic: {action: opts.args[4], models: 0, menus: 0}}}];
         return [{documentId: options.postPrefillDocumentChanged ? 'changed-document' : 'prefill-document',
           result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(8),open:pickerOpen} :
             options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed',diagnostic:options.postPrefillModelDiagnostic} :
@@ -370,6 +373,14 @@ test('configured native proof uses trusted input in the fresh renderer before re
   }
   assert.equal(prefillCount(f),1);assert.equal(enterCount(f),0);
 });
+test('configured native renderer is focus-emulated before acquiring its initially absent model trigger', async () => {
+  const f = workerFixture({wakeMode:'configured',prefillRequiresFocus:true}); await run(f);
+  assert.equal(f.events.find(e=>e.path==='/extension/result')?.body?.ok,true);
+  const post=f.events.slice(f.events.findIndex(e=>e.update)+1);
+  assert(post.findIndex(e=>e.method==='Emulation.setFocusEmulationEnabled') < post.findIndex(e=>e.modelProof));
+  assert.equal(prefillCount(f),1);
+});
+
 test('configured native proof refuses a missing target or ignored trusted input without sending', async () => {
   for(const options of [{prefillPointMissing:true},{prefillPickerNeverOpens:true},{postPrefillForeign:true}]) {
     const f=workerFixture({wakeMode:'configured',...options});await run(f);

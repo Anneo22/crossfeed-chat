@@ -659,7 +659,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
             if (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') || phase < nativePhase) throw Error('page_changed');
             nativePhase = phase;
             const args: [PageTicket, number, number, number, 'point' | 'observe'] =
-              [pageTicket, expectedMaximum, Math.max(1, Math.min(5000, activeTicket.expires_at - now())), 50, action];
+              [pageTicket, expectedMaximum, Math.max(1, Math.min(action === 'point' ? 15000 : 5000, activeTicket.expires_at - now())), 50, action];
             const [value]: Injection<PrefillModelResult>[] = await pageScript({
               target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args,
             });
@@ -669,13 +669,17 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
             if (!value?.result || action === 'point' && value.result.ready !== true) throw Error('level_unconfirmed');
             return value.result;
           };
-          // A fresh renderer needs trusted pointer input, just like initial
-          // selection. HTMLElement.click() does not open the native trigger;
-          // synthetic pointerdown can also be ignored until focus is emulated.
-          // Every input is guarded by owned-tab URL and pinned-document proof.
-          if ((await modelRead('point')).open) throw Error('level_unconfirmed');
+          // Native navigation replaced the renderer whose focus we emulated
+          // for initial selection. Activate this owned renderer before waiting
+          // for its model trigger, not only after that trigger already exists.
+          // This does not foreground Chrome or insert/change any page content.
+          const current = await getOwnedTab(), phase = ordinaryWakePhase(current.url, prompt);
+          if (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') || phase < nativePhase) throw Error('page_changed');
           await browser.debugger.attach({tabId: activeTab.id}, '1.3'); attached = true;
           await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});
+          // Trusted pointer input is still required to open the native trigger.
+          // Every input is guarded by owned-tab URL and pinned-document proof.
+          if ((await modelRead('point')).open) throw Error('level_unconfirmed');
           const input = async (method: string, params: Record<string, unknown>) => {
             await modelRead('point');
             await browser.debugger.sendCommand({tabId: activeTab.id}, method, params);

@@ -17,9 +17,9 @@ function fixture(extra: Record<string, any> = {}) {
 
 test('failure status retains only bounded diagnostic observations, never raw page data', () => {
   const f=fixture(),t=f.begin()!;
-  f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic:{checkpoint:'prefill_model',status:'complete',current:{uri_class:'root',url:'private'},pending:{uri_class:'private'},nonce:'private',model:{models:1,menus:1,position:1,maximum:4,rowMatches:true,statusMatches:false,text:'private',selected:100}}});
+  f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic:{checkpoint:'prefill_model',status:'complete',current:{uri_class:'root',url:'private'},pending:{uri_class:'private'},nonce:'private',model:{action:'observe',models:1,menus:1,position:1,maximum:4,rowMatches:true,statusMatches:false,text:'private',selected:100}}});
   const status=f.wakes.status()[0];
-  assert.deepEqual(status.failure_diagnostic,{checkpoint:'prefill_model',status:'complete',current:'root',model_models:1,model_menus:1,model_position:1,model_maximum:4,model_rowMatches:true,model_statusMatches:false});
+  assert.deepEqual(status.failure_diagnostic,{checkpoint:'prefill_model',status:'complete',current:'root',model_action:'observe',model_models:1,model_menus:1,model_position:1,model_maximum:4,model_rowMatches:true,model_statusMatches:false});
   assert(!JSON.stringify(status).includes('private'));
 });
 test('one issued wake at a time; queued tickets get a fresh four-minute window', () => {

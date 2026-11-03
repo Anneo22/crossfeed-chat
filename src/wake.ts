@@ -49,6 +49,7 @@ function failureDiagnostic(value: unknown) {
     if (typeof uri === 'string' && ['missing','blank','root','native_q','native_prompt','root_other_query','conversation','login','foreign','other'].includes(uri)) out[key]=uri;
   }
   if (object(value.model)) {
+    if (value.model.action === 'point' || value.model.action === 'observe') out.model_action = value.model.action;
     for(const key of ['models','menus','selected','sliders','minimum','maximum','position']) {
       const v=value.model[key];if(typeof v==='number'&&Number.isInteger(v)&&v>=-1&&v<=8) out['model_'+key]=v;
     }

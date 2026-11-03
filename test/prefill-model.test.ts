@@ -13,7 +13,13 @@ function fixture(options:Record<string,any>={}) {
   const status=node(options.status??'High, 3 of 3.');
   const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
   const model=node('',options.disabled?{'aria-disabled':'true'}:{});
-  const doc={querySelectorAll:(selector:string)=>selector.includes('model-switcher')?(options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model]):selector==='[role="menu"]'&&options.open!==false?(options.duplicateMenu?[menu,menu]:[menu]):[]};
+  const doc={querySelectorAll:(selector:string)=>{
+    if(selector.includes('model-switcher')) {
+      options.onModelRead?.();
+      return options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model];
+    }
+    return selector==='[role="menu"]'&&options.open!==false?(options.duplicateMenu?[menu,menu]:[menu]):[];
+  }};
   return doc;
 }
 async function run(options:Record<string,any>={},fn=prefillModel) {
@@ -44,6 +50,15 @@ test('configured Pro proof waits for the native picker announcement to catch up'
 });
 test('configured native proof waits for a hydrated old thumb to settle to the requested level',async()=>{
   assert.deepEqual(await run({positionLagReads:2,stalePosition:'1',timeoutMs:500}),{verified:true,row:'Latest',level:2,maximum:2});
+});
+test('pointer acquisition waits up to the native hydration budget, without extending exact model proof',async t=>{
+  let clock=Date.now(); t.mock.method(Date,'now',()=>clock);
+  const options={delayedModelReads:7,timeoutMs:15000,onModelRead:()=>{clock+=1000;}};
+  assert.equal((await run({...options,action:'point',open:false})).ready,true);
+  assert.equal((await run(options)).verified,false); // Observe still has its strict five-second budget.
+});
+test('disabled model target failures retain bounded counts for diagnosis',async()=>{
+  assert.deepEqual((await run({action:'point',disabled:true})).diagnostic,{action:'point',models:1,menus:1});
 });
 test('configured model proof refuses when the trigger stays missing',async()=>{
   assert.equal((await run({noModel:true})).verified,false);

@@ -7,7 +7,10 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
   const levels = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
-  const deadline = Math.min(ticket.expires_at, Date.now() + Math.max(1, Math.min(timeoutMs, 5000)));
+  // The composer can hydrate before its model trigger, especially in an idle
+  // renderer. Pointer acquisition shares the native-prefill 15s DOM budget;
+  // exact row/thumb/status proof remains separately bounded to five seconds.
+  const deadline = Math.min(ticket.expires_at, Date.now() + Math.max(1, Math.min(timeoutMs, action === 'point' ? 15000 : 5000)));
   const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
   const visible = <E extends Element>(el: E | null | undefined): el is E => !!el && el.isConnected !== false && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0 && (typeof getComputedStyle !== 'function' || !['hidden', 'collapse'].includes(getComputedStyle(el).visibility));
   const all = (root: ParentNode, selector: string): HTMLElement[] => [...root.querySelectorAll(selector)].filter(visible) as HTMLElement[];
@@ -33,18 +36,18 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     const menus = all(document, '[role="menu"]');
     diagnostic = {action, models:Math.min(8,models.length), menus:Math.min(8,menus.length)};
     if (models.length > 1 || menus.length > 1) return fail('level_unconfirmed');
-    if (model && (models.length !== 1 || models[0] !== model)) return {verified: false, error: 'page_changed'};
+    if (model && (models.length !== 1 || models[0] !== model)) return fail('page_changed');
     if (models.length === 1) {
       model = models[0];
-      if (model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return {verified: false, error: 'level_unconfirmed'};
+      if (model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return fail('level_unconfirmed');
       if (action === 'point') {
         const r = model.getBoundingClientRect();
         const x = r.x + r.width / 2, y = r.y + r.height / 2;
-        if (![x, y, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return {verified: false, error: 'level_unconfirmed'};
+        if (![x, y, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return fail('level_unconfirmed');
         return {verified: false, ready: true, modelPoint: {x, y}, open: menus.length === 1};
       }
       if (menus.length === 1) {
-        if (ownedMenu && ownedMenu !== menus[0]) return {verified: false, error: 'page_changed'};
+        if (ownedMenu && ownedMenu !== menus[0]) return fail('page_changed');
         ownedMenu = menus[0];
         const rows = [...ownedMenu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];
         const selected = rows.filter(row => row.getAttribute('aria-checked') === 'true');
