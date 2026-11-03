@@ -268,6 +268,7 @@ test('forged rotation tokens and wrong client/resource cannot revoke an authenti
     [parts[0],other.refresh_token!.split('.')[1],parts[2],parts[3]].join('.'),
     [parts[0],parts[1],'B'.repeat(32),parts[3]].join('.'),
     ['r2',...parts.slice(1)].join('.'),
+    ...['\n','\r','\u2028'].map(suffix=>current.refresh_token!+suffix),
   ]) assert.throws(()=>refresh(oauth,first.client,forged),fault(400,'invalid_grant'));
   assert.throws(()=>refresh(oauth,independent.client,initial.refresh_token),fault(400,'invalid_grant'));
   assert.throws(()=>refresh(oauth,first.client,initial.refresh_token,{resource:`${issuer}/tools/mcp`}),fault(400,'invalid_grant'));
