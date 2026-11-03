@@ -38,10 +38,17 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
   }
   if (!model) return {verified: false, error: 'level_unconfirmed'};
-  if (typeof model.click !== 'function' || model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return {verified: false, error: 'level_unconfirmed'};
+  if (typeof model.dispatchEvent !== 'function' || typeof PointerEvent !== 'function' || model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return {verified: false, error: 'level_unconfirmed'};
+  // The native Radix trigger toggles on pointerdown, not HTMLElement.click().
+  // Target only the unique attested model control: no composer input or model
+  // selection is synthesized. Exact row/thumb/announcement proof still follows.
+  const toggle = () => model!.dispatchEvent(new PointerEvent('pointerdown', {
+    bubbles: true, cancelable: true, button: 0, buttons: 1,
+    pointerType: 'mouse', isPrimary: true,
+  }));
   let ownedMenu: HTMLElement | undefined;
   try {
-    model.click();
+    toggle();
     while (Date.now() < deadline) {
       if (!authorized() || !visible(model)) return {verified: false, error: 'page_changed'};
       const menus = all(document, '[role="menu"]');
@@ -79,7 +86,7 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     if (ownedMenu && authorized() && visible(model)) {
       const menus = all(document, '[role="menu"]');
       if (menus.length === 1 && menus[0] === ownedMenu) {
-        try { model.click(); } catch { /* Never repair state by typing or clearing. */ }
+        try { toggle(); } catch { /* Never repair state by typing or clearing. */ }
       }
     }
   }

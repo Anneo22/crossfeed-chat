@@ -7,24 +7,35 @@ const ticket = () => ({nonce:'a'.repeat(32),label:'wake-'+'a'.repeat(32),connect
 const prompt = (t:ReturnType<typeof ticket>) => `@${t.connector} wake up. First gateway_exchange: worker_label=${JSON.stringify(t.label)} exactly as issued, wake_nonce=${JSON.stringify(t.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(t.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
 function fixture(options:Record<string,any>={}) {
   let open=false, clicks=0, modelReads=0, statusReads=0, sliderReads=0;
+  const toggle=()=>{clicks++;open=!open;if(options.foreignAfterClick)globals.location.href='https://evil.example/';};
   const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[]});
   const row=node(options.row??'Latest',{'aria-checked':'true'});
   const slider=node('',{'aria-valuemin':options.minimum??'0','aria-valuemax':options.maximum??'2','aria-valuenow':options.position??'2'});
   const status=node(options.status??'High, 3 of 3.');
   const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
   const model=node('',options.disabled?{'aria-disabled':'true'}:{});
-  model.click=()=>{clicks++;open=!open;if(options.foreignAfterClick)globals.location.href='https://evil.example/';};
+  model.click=()=>{if(!options.pointerOnly)toggle();};
+  model.dispatchEvent=(event:any)=>{
+    assert.equal(event.type,'pointerdown');assert.equal(event.button,0);
+    assert.equal(event.pointerType,'mouse');assert.equal(event.bubbles,true);
+    toggle();return true;
+  };
   const doc={querySelectorAll:(selector:string)=>selector.includes('model-switcher')?(options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model]):selector==='[role="menu"]'&&open?(options.duplicateMenu?[menu,menu]:[menu]):[]};
   return {doc,clicks:()=>clicks};
 }
 async function run(options:Record<string,any>={},fn=prefillModel) {
-  const t={...ticket(),level:options.level??2},f=fixture(options),keys=['document','location'],previous=keys.map(k=>Object.getOwnPropertyDescriptor(globalThis,k));
+  const t={...ticket(),level:options.level??2},f=fixture(options),keys=['document','location','PointerEvent'],previous=keys.map(k=>Object.getOwnPropertyDescriptor(globalThis,k));
+  globals.PointerEvent=class {constructor(type:string,init:any){Object.assign(this,{type},init);}};
   globals.document=f.doc;globals.location={href:options.url??'https://chatgpt.com/?q='+encodeURIComponent(prompt(t))};
   try {return {result:await fn(t,options.expectedMaximum??2,options.timeoutMs??10,1),clicks:f.clicks()};}
   finally {keys.forEach((key,i)=>previous[i]?Object.defineProperty(globalThis,key,previous[i]!):delete globals[key]);}
 }
 test('configured prefill re-observes the exact selected row and High2 of three, without changing it',async()=>{
   assert.deepEqual(await run(),{result:{verified:true,row:'Latest',level:2,maximum:2},clicks:2});
+});
+test('configured Pro proof opens and closes the pointerdown-only native model trigger',async()=>{
+  assert.deepEqual(await run({pointerOnly:true,level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',timeoutMs:100}),
+    {result:{verified:true,row:'Latest',level:4,maximum:4},clicks:2});
 });
 test('configured model proof waits for the picker trigger after the composer has hydrated',async()=>{
   const value=await run({delayedModelReads:2,timeoutMs:500});
