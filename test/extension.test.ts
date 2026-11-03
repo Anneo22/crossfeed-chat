@@ -177,7 +177,7 @@ function workerFixture(options: Record<string, any> = {}) {
     tabGroups: {update: async (id: any, opts: any) => events.push({groupUpdate: {id, ...opts}})},
     debugger: {
       attach: async () => {events.push({attach: true}); if (options.attachError) throw Error('private UI detail');},
-      detach: async () => events.push({detach: true}),
+      detach: async () => { options.prefillFocused = false; events.push({detach: true}); },
       sendCommand: async (_: any, method: string, params: any) => {
         events.push({method, params});
         if (method === 'Emulation.setFocusEmulationEnabled') options.prefillFocused = true;
@@ -254,6 +254,7 @@ function workerFixture(options: Record<string, any> = {}) {
       if (action === 'send') result = {ready: true};
       if (action === 'registration' && options.approvedLinger > 0 && --options.approvedLinger === 0) options.allow = false;
       if (action === 'registration' && sent && options.ambiguousPermission) throw Error('permission_unconfirmed');
+      if (action === 'registration' && options.registrationRequiresFocus && !options.prefillFocused) throw Error('page_not_ready');
       if (action === 'registration') result = {url: sent ? 'https://chatgpt.com/c/new' : 'https://chatgpt.com/', allowPoint: options.allow && (!options.dropdown || options.menuOpen) ? point(5) : null, ...(options.allow ? {allowOption: options.dropdown ? `Allow ${value.connector} for this conversation` : 'Always allow', permissionPending: true, ...(options.dropdown && !options.menuOpen ? {optionsPoint: point(7)} : {})} : {})};
       const registrationDocument = action === 'registration' && sent ? (++registrationScripts > 1 && options.registrationDocumentChanged ? 'different-document' : 'registration-document') : 'new-document';
       return [{documentId: registrationDocument, result}];
@@ -379,6 +380,14 @@ test('configured native renderer is focus-emulated before acquiring its initiall
   const post=f.events.slice(f.events.findIndex(e=>e.update)+1);
   assert(post.findIndex(e=>e.method==='Emulation.setFocusEmulationEnabled') < post.findIndex(e=>e.modelProof));
   assert.equal(prefillCount(f),1);
+});
+
+test('configured native wake retains renderer focus through send and registration, without foregrounding', async () => {
+  const f = workerFixture({wakeMode:'configured',registrationRequiresFocus:true}); await run(f);
+  assert.equal(f.events.find(e=>e.path==='/extension/result')?.body?.ok,true);
+  const post=f.events.slice(f.events.findIndex(e=>e.update)+1);
+  assert(post.findIndex(e=>e.detach) > post.findIndex(e=>e.path==='/extension/result'));
+  assert.equal(f.events.find(e=>e.create)?.create.active,false);
 });
 
 test('configured native proof refuses a missing target or ignored trusted input without sending', async () => {

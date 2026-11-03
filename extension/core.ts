@@ -701,7 +701,10 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
             await input('Input.dispatchKeyEvent', {type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
           }
           if ((await modelRead('point')).open) throw Error('level_unconfirmed');
-          await browser.debugger.detach({tabId: activeTab.id}); attached = false;
+          // Keep focus emulation through native send and registration. Detaching
+          // here deactivates the hidden renderer again, stalling DOM probes and
+          // provisional-route hydration after the job has already been answered.
+          // No further debugger input is sent; finally always detaches it.
         }
 
         // Revalidate URL/ticket immediately before the only send-capable call.
