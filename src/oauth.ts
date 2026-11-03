@@ -145,10 +145,14 @@ export class OAuth {
       if (input.scope !== undefined) check(this.scope(input.scope).split(' ').every(s => row.scope.split(' ').includes(s)), 'Cannot widen refresh scope', 400, 'invalid_scope');
       check(Object.keys(next.spent).length < 1024, 'Refresh ledger is full', 429);
       check(Object.values(next.tokens).filter(v => v.family !== row.family).length < 128, 'Token limit reached', 429);
+      // Successful rotation renews inactivity, not a fixed authorization date.
+      // Keep prior-token tombstones for that live family just as long: pruning
+      // them at the original deadline would disable family-revoking reuse detection.
+      row = { ...row, expires: this.now() + 30 * 86400000, ...(input.scope !== undefined ? {scope: input.scope} : {}) };
       delete next.refresh[key];
       next.spent[key] = { family: row.family, expires: row.expires };
+      for (const spent of Object.values(next.spent)) if (spent.family === row.family) spent.expires = row.expires;
       for (const [k, v] of Object.entries(next.tokens)) if (v.family === row.family) delete next.tokens[k];
-      if (input.scope !== undefined) row = { ...row, scope: input.scope };
     } else throw new Fault(400, 'unsupported_grant_type', 'Unsupported grant');
     const access = nonce(), refresh = nonce();
     next.tokens[hash(access)] = { client: row.client, scope: row.scope, family: row.family, resource: row.resource, expires: this.now() + 3600000 };

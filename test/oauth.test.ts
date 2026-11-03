@@ -249,13 +249,61 @@ test('offline_access determines refresh issuance and access expires independentl
   assert.equal(oauth.authenticate('x'.repeat(257)), null);
 });
 
-test('refresh expires at the original thirty-day family deadline', t => {
-  const { oauth, advance } = fixture(t); const grant = approveCode(oauth);
-  const tokens = redeem(oauth, grant);
+test('successful refresh slides the thirty-day idle deadline across restart, never the one-hour access lifetime', t => {
+  const { oauth, advance, now, directory } = fixture(t); const grant = approveCode(oauth);
+  let tokens = redeem(oauth, grant);
+  let active = oauth;
+  for (let i = 0; i < 3; i++) {
+    advance(29 * 86400000);
+    tokens = refresh(active, grant.client, tokens.refresh_token);
+    assert.equal(active.state.refresh[hash(tokens.refresh_token!)].expires, now() + 30 * 86400000);
+    assert.equal(active.state.tokens[hash(tokens.access_token)].expires, now() + 3600000);
+    active = new OAuth(directory, issuer, now);
+  }
+  advance(30 * 86400000);
+  assert.throws(() => refresh(active, grant.client, tokens.refresh_token), fault(400, 'invalid_grant'));
+});
+
+test('sliding refresh retains old-token reuse detection for the live family beyond the original deadline', t => {
+  const { oauth, advance, now, directory } = fixture(t);
+  const grant = approveCode(oauth), initial = redeem(oauth, grant);
+  advance(20 * 86400000);
+  const next = refresh(oauth, grant.client, initial.refresh_token);
+  advance(20 * 86400000);
+  const active = new OAuth(directory, issuer, now);
+  const latest = refresh(active, grant.client, next.refresh_token);
+  const otherGrant = approveCode(active, {registration: {client_name: 'Independent'}});
+  const other = redeem(active, otherGrant);
+  assert.throws(() => refresh(active, grant.client, initial.refresh_token), fault(400, 'invalid_grant'));
+  assert.equal(active.authenticate(latest.access_token), null);
+  assert.throws(() => refresh(active, grant.client, latest.refresh_token), fault(400, 'invalid_grant'));
+  assert.equal(active.authenticate(other.access_token), otherGrant.client.client_id);
+});
+
+test('revocation still removes a renewed family and its retained reuse ledger across restart', t => {
+  const { oauth, advance, directory, now } = fixture(t), grant = approveCode(oauth), initial = redeem(oauth, grant);
   advance(29 * 86400000);
-  const rotated = refresh(oauth, grant.client, tokens.refresh_token);
+  const active = refresh(oauth, grant.client, initial.refresh_token);
+  const family = oauth.state.refresh[hash(active.refresh_token!)].family;
+  oauth.revoke(grant.client.client_id);
+  const restarted = new OAuth(directory, issuer, now);
+  assert.equal(restarted.authenticate(active.access_token), null);
+  assert.equal(Object.values(restarted.state.spent).some(row => row.family === family), false);
+  assert.throws(() => refresh(restarted, grant.client, active.refresh_token), fault(400, 'invalid_client'));
+});
+
+test('refused refresh and persistence failure do not extend idle expiry or consume the rotation', t => {
+  const { oauth, advance } = fixture(t), grant = approveCode(oauth), initial = redeem(oauth, grant);
+  advance(29 * 86400000);
+  oauth.prune(); // Expired access-token pruning is independent of failed rotation.
+  const before = structuredClone(oauth.state);
+  assert.throws(() => refresh(oauth, grant.client, initial.refresh_token, {scope: 'mcp:tools admin'}), fault(400));
+  assert.deepEqual(oauth.state, before);
+  const mock = t.mock.method(fs, 'renameSync', () => {throw Error('disk full');});
+  assert.throws(() => refresh(oauth, grant.client, initial.refresh_token)); mock.mock.restore();
+  assert.deepEqual(oauth.state, before);
   advance(86400000);
-  assert.throws(() => refresh(oauth, grant.client, rotated.refresh_token), fault(400, 'invalid_grant'));
+  assert.throws(() => refresh(oauth, grant.client, initial.refresh_token), fault(400, 'invalid_grant'));
 });
 
 test('restart retains hashed tokens and rotation/reuse state, never raw secrets on disk', t => {
