@@ -186,7 +186,10 @@ function workerFixture(options: Record<string, any> = {}) {
           if (params.x === 4) pendingMention = true;
           if (params.x === 5) { if (options.linger) options.approvedLinger = 3; else options.allow = false; }
           if (params.x === 7) options.menuOpen = true;
-          if (params.x === 6 && ++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
+          if (params.x === 6) {
+            clock += options.pickerClickMs ?? 0;
+            if (++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
+          }
           if (params.x === 8 && !options.prefillPickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
@@ -318,6 +321,18 @@ test('configured picker waits for delayed level announcements without weakening 
   assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
   assert.deepEqual(f.events.find(e => e.path === '/extension/observe')?.body?.picker_receipt, {row: 'GPT-6', level: 4});
   assert.equal(prefillCount(f), 1);
+});
+
+test('configured picker observes a slow acknowledged click before expiring its opening budget', async () => {
+  const f = workerFixture({wakeMode: 'configured', pickerClickMs: 6000}); await run(f);
+  assert.equal(f.events.find((e: any) => e.path === '/extension/result')?.body.ok, true);
+  assert.equal(prefillCount(f), 1);
+});
+
+test('configured picker still refuses a slow click when its menu never opens', async () => {
+  const f = workerFixture({wakeMode: 'configured', pickerClickMs: 6000, pickerNeverOpens: true}); await run(f);
+  assert.equal(f.events.find((e: any) => e.path === '/extension/result')?.body.ok, false);
+  assert.equal(prefillCount(f), 0);
 });
 
 test('configured picker still refuses a missing pointer target or a menu that never opens', async () => {

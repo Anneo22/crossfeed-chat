@@ -876,9 +876,14 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       const openPicker = async (): Promise<PageProbe> => {
         const deadline = Math.min(activeTicket.expires_at, now() + 5000);
         let nextClickAt = 0;
-        while (now() < deadline) {
+        // Always observe an acknowledged click before checking the opening
+        // budget. Under host load, guarded pointer dispatch itself can take
+        // longer than that budget even though it successfully opened the menu.
+        // The read still enforces ticket expiry and the pinned document/URL.
+        while (true) {
           const current = await read('picker');
           if (current.open) return current;
+          if (now() >= deadline) throw Error('page_not_ready');
           if (now() >= nextClickAt) {
             const model = await read('modelFocus');
             // Pointer input does not require keyboard focus. The home shell can
@@ -889,7 +894,6 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           }
           await pause(100);
         }
-        throw Error('page_not_ready');
       };
       state = await openPicker();
       if (state.row !== activeTicket.row) {
