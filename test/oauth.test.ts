@@ -208,6 +208,86 @@ test('authorization codes expire after sixty seconds', t => {
   assert.throws(() => redeem(oauth, grant), fault(400, 'invalid_grant'));
 });
 
+test('5000 hourly rotations across two families stay bounded without a shared ledger cliff', t => {
+  const {oauth, advance, directory, now} = fixture(t);
+  const grants = [approveCode(oauth), approveCode(oauth, {registration:{client_name:'Other'}})];
+  const tokens = grants.map(g => redeem(oauth, g)); let active = oauth;
+  for (let i=0; i<5000; i++) {
+    advance(1800000); const f=i%2;
+    tokens[f]=refresh(active, grants[f].client, tokens[f].refresh_token);
+    if (i%1000===999) active=new OAuth(directory, issuer, now);
+  }
+  assert.equal(Object.keys(active.state.spent).length, 0);
+  assert.equal(Object.keys(active.state.refresh).length, 2);
+  assert.equal(Object.keys(active.state.tokens).length, 2);
+  assert(fs.statSync(path.join(directory,'oauth.json')).size < 4096);
+  for (let f=0; f<2; f++) assert.equal(active.authenticate(tokens[f].access_token),grants[f].client.client_id);
+});
+
+test('oldest refresh still revokes only its family after 5000 rotations and restart', t => {
+  const {oauth, directory, now} = fixture(t), first=approveCode(oauth), initial=redeem(oauth,first);
+  const independent=approveCode(oauth,{registration:{client_name:'Other'}}), other=redeem(oauth,independent);
+  let current=initial;
+  for (let i=0; i<5000; i++) current=refresh(oauth,first.client,current.refresh_token);
+  const active=new OAuth(directory,issuer,now);
+  assert.equal(active.authenticate(current.access_token),first.client.client_id);
+  assert.throws(()=>refresh(active,first.client,initial.refresh_token),fault(400,'invalid_grant'));
+  assert.equal(active.authenticate(current.access_token),null);
+  assert.throws(()=>refresh(active,first.client,current.refresh_token),fault(400,'invalid_grant'));
+  assert.equal(active.authenticate(other.access_token),independent.client.client_id);
+  assert(refresh(active,independent.client,other.refresh_token).refresh_token);
+});
+
+test('legacy opaque grants migrate without reconnect or global-ledger starvation and retain oldest reuse detection', t => {
+  const {oauth,directory,now}=fixture(t), first=approveCode(oauth), initial=redeem(oauth,first);
+  const independent=approveCode(oauth,{registration:{client_name:'Other'}}), other=redeem(oauth,independent);
+  const row=oauth.state.refresh[hash(initial.refresh_token!)]; delete row.refreshKey;
+  delete oauth.state.tokens[hash(initial.access_token)].refreshKey;
+  delete oauth.state.refresh[hash(initial.refresh_token!)];
+  const old='legacy-old-token', current='legacy-current-token'; oauth.state.refresh[hash(current)]=row;
+  oauth.state.spent[hash(old)]={family:row.family,expires:row.expires};
+  for (let i=1; i<1024; i++) oauth.state.spent[hash(`legacy-spent-${i}`)]={family:row.family,expires:row.expires};
+  oauth.save(); const active=new OAuth(directory,issuer,now);
+  let next=refresh(active,first.client,current);
+  for (let i=0; i<20; i++) next=refresh(active,first.client,next.refresh_token);
+  assert.equal(Object.keys(active.state.spent).length,1025); // Fixed migration debt, never per-new-rotation growth.
+  const unrelated=refresh(active,independent.client,other.refresh_token);
+  assert.throws(()=>refresh(active,first.client,old),fault(400,'invalid_grant'));
+  assert.equal(active.authenticate(next.access_token),null);
+  assert.equal(active.authenticate(unrelated.access_token),independent.client.client_id);
+  assert.equal(Object.keys(active.state.spent).length,0);
+});
+
+test('forged rotation tokens and wrong client/resource cannot revoke an authentic family', t => {
+  const {oauth}=fixture(t), first=approveCode(oauth), initial=redeem(oauth,first);
+  const independent=approveCode(oauth,{registration:{client_name:'Other'}}), other=redeem(oauth,independent);
+  const current=refresh(oauth,first.client,initial.refresh_token);
+  const parts=initial.refresh_token!.split('.'); assert.equal(parts.length,4);
+  for (const forged of [
+    [...parts.slice(0,3), 'A'.repeat(43)].join('.'),
+    [parts[0],other.refresh_token!.split('.')[1],parts[2],parts[3]].join('.'),
+    [parts[0],parts[1],'B'.repeat(32),parts[3]].join('.'),
+    ['r2',...parts.slice(1)].join('.'),
+  ]) assert.throws(()=>refresh(oauth,first.client,forged),fault(400,'invalid_grant'));
+  assert.throws(()=>refresh(oauth,independent.client,initial.refresh_token),fault(400,'invalid_grant'));
+  assert.throws(()=>refresh(oauth,first.client,initial.refresh_token,{resource:`${issuer}/tools/mcp`}),fault(400,'invalid_grant'));
+  assert.equal(oauth.authenticate(current.access_token),first.client.client_id);
+  assert.equal(oauth.authenticate(other.access_token),independent.client.client_id);
+});
+
+test('old signed-token reuse revokes even after offline_access was removed, and failed save is atomic', t => {
+  const {oauth,directory,now}=fixture(t), grant=approveCode(oauth), initial=redeem(oauth,grant);
+  const current=refresh(oauth,grant.client,initial.refresh_token,{scope:'mcp:tools'});
+  assert.equal(current.refresh_token,undefined);
+  const before=structuredClone(oauth.state), mock=t.mock.method(fs,'renameSync',()=>{throw Error('disk full');});
+  assert.throws(()=>refresh(oauth,grant.client,initial.refresh_token)); mock.mock.restore();
+  assert.deepEqual(oauth.state,before);
+  const active=new OAuth(directory,issuer,now);
+  assert.equal(active.authenticate(current.access_token),grant.client.client_id);
+  assert.throws(()=>refresh(active,grant.client,initial.refresh_token),fault(400,'invalid_grant'));
+  assert.equal(active.authenticate(current.access_token),null);
+});
+
 test('refresh rotates tokens, invalidates old access and reuse revokes only its family', t => {
   const { oauth } = fixture(t);
   const first = approveCode(oauth); const initial = redeem(oauth, first);

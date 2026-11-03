@@ -1,10 +1,13 @@
 interface OAuthClient { id: string; name: string; redirect: string; expires?: number }
-interface Grant { client: string; scope: string; family: string; resource: string; expires: number }
+interface Grant { client: string; scope: string; family: string; resource: string; expires: number; refreshKey?: string }
 interface AuthCode { client: string; redirect: string; scope: string; resource: string; challenge: string; expires: number }
 interface Approval { id: string; client: OAuthClient; challenge: string; scope: string; resource: string; state: string; browser: string; expires: number; approved: boolean }
 interface OAuthState { issuer: string; clients: Record<string, OAuthClient>; tokens: Record<string, Grant>; refresh: Record<string, Grant>; spent: Record<string, {family: string; expires: number}> }
 interface Registration { redirect_uris: string[]; token_endpoint_auth_method?: string; grant_types?: string[]; response_types?: string[]; scope?: string; client_name?: string }
+import { createHmac } from 'node:crypto';
 import { check, equal, Fault, hash, line, nonce, readPrivate, text, writePrivate } from './security.ts';
+
+const refreshSignature = (key: string, payload: string) => createHmac('sha256', key).update(payload).digest('base64url');
 
 const TAB_ICON = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ctitle%3ECrossfeed%20Chat%3C%2Ftitle%3E%3Cstyle%3E%3Aroot%7B--i%3A%23E9E6DF%3B--p%3A%23141311%3B--t%3A%23301E15%3B--h%3A%23C4552A%7D%40media%28prefers-color-scheme%3Alight%29%7B%3Aroot%7B--i%3A%2314130F%3B--p%3A%23FAF9F4%3B--t%3A%23F1DFD4%7D%7D%3C%2Fstyle%3E%3Crect%20width%3D%2216%22%20height%3D%2216%22%20rx%3D%223%22%20fill%3D%22var%28--p%29%22%2F%3E%3Cg%20id%3D%22square-chat-tank%22%20transform%3D%22translate%2816%200%29%20scale%28-1%201%29%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221%22%3E%0A%3Cdefs%3E%3CclipPath%20id%3D%22tank-tab%22%3E%3Cpath%20d%3D%22M7.5%201.5H11.5Q14.5%201.5%2014.5%204.5V9.5Q14.5%2012.5%2011.5%2012.5H9.5L6.5%2014.5V12.5Q4.5%2012.5%204.5%2010.5V4.5Q4.5%201.5%207.5%201.5Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%0A%3Cpath%20id%3D%22outgoing-feed%22%20d%3D%22M0.5%209.5H4.5%22%20fill%3D%22none%22%20stroke%3D%22var%28--i%29%22%2F%3E%0A%3Cpath%20id%3D%22chat-tank%22%20d%3D%22M7.5%201.5H11.5Q14.5%201.5%2014.5%204.5V9.5Q14.5%2012.5%2011.5%2012.5H9.5L6.5%2014.5V12.5Q4.5%2012.5%204.5%2010.5V4.5Q4.5%201.5%207.5%201.5Z%22%20fill%3D%22var%28--p%29%22%2F%3E%0A%3Cg%20clip-path%3D%22url%28%23tank-tab%29%22%3E%3Crect%20x%3D%224.5%22%20y%3D%224.5%22%20width%3D%2210.0%22%20height%3D%2216%22%20fill%3D%22var%28--t%29%22%2F%3E%0A%3Cpath%20id%3D%22fuel-level%22%20d%3D%22M4.5%204.5H14.5%22%20stroke%3D%22var%28--h%29%22%2F%3E%3C%2Fg%3E%0A%3Cpath%20d%3D%22M7.5%201.5H11.5Q14.5%201.5%2014.5%204.5V9.5Q14.5%2012.5%2011.5%2012.5H9.5L6.5%2014.5V12.5Q4.5%2012.5%204.5%2010.5V4.5Q4.5%201.5%207.5%201.5Z%22%20fill%3D%22none%22%20stroke%3D%22var%28--i%29%22%2F%3E%0A%3Cg%20id%3D%22feed-valve%22%3E%3Ccircle%20cx%3D%222.5%22%20cy%3D%229.5%22%20r%3D%221.5%22%20fill%3D%22var%28--p%29%22%20stroke%3D%22var%28--i%29%22%2F%3E%0A%3Cpath%20d%3D%22M2.5%208.5V10.5%22%20stroke%3D%22var%28--h%29%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E';
 
@@ -133,33 +136,46 @@ export class OAuth {
       row = { client: code.client, resource: code.resource, scope: code.scope, family: nonce(), expires: this.now() + 30 * 86400000 };
     } else if (input.grant_type === 'refresh_token') {
       text(input.refresh_token, 'refresh token', 128);
-      const key = hash(input.refresh_token);
-      const spent = next.spent[key];
-      if (spent) {
-        for (const type of ['tokens', 'refresh'] as const) for (const [k, v] of Object.entries(next[type])) if (v.family === spent.family) delete next[type][k];
+      const key = hash(input.refresh_token), current = next.refresh[key];
+      let reused = next.spent[key]?.family;
+      if (!current && !reused) {
+        // Only an authentic, non-current token proves reuse. A guessed family or
+        // changed nonce/signature must never confer authority to revoke it.
+        const signed = /^r1\.([A-Za-z0-9_-]{32})\.([A-Za-z0-9_-]{32})\.([A-Za-z0-9_-]{43})$/.exec(input.refresh_token);
+        const family = signed && [...Object.values(next.refresh), ...Object.values(next.tokens)].find(v => v.family === signed[1] && v.refreshKey);
+        if (family?.refreshKey && equal(signed![3], refreshSignature(family.refreshKey, `r1.${signed![1]}.${signed![2]}`))) reused = family.family;
+      }
+      if (reused) {
+        const family = [...Object.values(next.refresh), ...Object.values(next.tokens)].find(v => v.family === reused);
+        check(family && family.client === input.client_id && family.resource === input.resource, 'Invalid refresh grant', 400, 'invalid_grant');
+        for (const type of ['tokens', 'refresh', 'spent'] as const) for (const [k, v] of Object.entries(next[type])) if (v.family === reused) delete next[type][k];
         writePrivate(this.directory, 'oauth.json', next); this.state = next;
         throw new Fault(400, 'invalid_grant', 'Refresh token reuse revoked its token family');
       }
-      row = next.refresh[key];
+      row = current;
       check(row && row.resource === input.resource && row.client === input.client_id, 'Invalid refresh grant', 400, 'invalid_grant');
       if (input.scope !== undefined) check(this.scope(input.scope).split(' ').every(s => row.scope.split(' ').includes(s)), 'Cannot widen refresh scope', 400, 'invalid_scope');
-      check(Object.keys(next.spent).length < 1024, 'Refresh ledger is full', 429);
       check(Object.values(next.tokens).filter(v => v.family !== row.family).length < 128, 'Token limit reached', 429);
-      // Successful rotation renews inactivity, not a fixed authorization date.
-      // Keep prior-token tombstones for that live family just as long: pruning
-      // them at the original deadline would disable family-revoking reuse detection.
+      // Successful rotation renews inactivity. Only pre-upgrade opaque tokens need
+      // tombstones: at most the existing ledger plus one per legacy live grant.
+      // Signed rotations add none, so no family can fill a global rotation ledger.
+      const legacy = !row.refreshKey;
       row = { ...row, expires: this.now() + 30 * 86400000, ...(input.scope !== undefined ? {scope: input.scope} : {}) };
       delete next.refresh[key];
-      next.spent[key] = { family: row.family, expires: row.expires };
+      if (legacy) next.spent[key] = { family: row.family, expires: row.expires };
       for (const spent of Object.values(next.spent)) if (spent.family === row.family) spent.expires = row.expires;
       for (const [k, v] of Object.entries(next.tokens)) if (v.family === row.family) delete next.tokens[k];
     } else throw new Fault(400, 'unsupported_grant_type', 'Unsupported grant');
-    const access = nonce(), refresh = nonce();
-    next.tokens[hash(access)] = { client: row.client, scope: row.scope, family: row.family, resource: row.resource, expires: this.now() + 3600000 };
-    const offline = row.scope.split(' ').includes('offline_access');
+    const access = nonce(), offline = row.scope.split(' ').includes('offline_access');
+    if (offline && !row.refreshKey) row = {...row, refreshKey: nonce()};
+    const payload = `r1.${row.family}.${nonce()}`;
+    const refresh = offline ? `${payload}.${refreshSignature(row.refreshKey!, payload)}` : undefined;
+    // Retain the family verifier with access too: replay must still revoke an
+    // unexpired access token after offline_access was narrowed away.
+    next.tokens[hash(access)] = {...row, expires: this.now() + 3600000};
     if (offline) {
       check(Object.keys(next.refresh).length < 128, 'Refresh family limit reached', 429);
-      next.refresh[hash(refresh)] = { ...row };
+      next.refresh[hash(refresh!)] = { ...row };
     }
     writePrivate(this.directory, 'oauth.json', next); this.state = next;
     if (codeKey) this.codes.delete(codeKey);

@@ -101,6 +101,7 @@ declare module 'node:os' { const os: { homedir(): string; tmpdir(): string; host
 declare module 'node:crypto' {
   interface Hash { update(value: string | Uint8Array): this; digest(encoding: string): string; }
   export function createHash(algorithm: string): Hash;
+  export function createHmac(algorithm: string, key: string | Uint8Array): Hash;
   export function randomBytes(size: number): Buffer;
   export function randomUUID(): string;
   export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean;
