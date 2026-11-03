@@ -272,11 +272,13 @@ test('sliding refresh retains old-token reuse detection for the live family beyo
   advance(20 * 86400000);
   const active = new OAuth(directory, issuer, now);
   const latest = refresh(active, grant.client, next.refresh_token);
+  advance(20 * 86400000); // Beyond even the first rotation's renewed deadline.
+  const current = refresh(active, grant.client, latest.refresh_token);
   const otherGrant = approveCode(active, {registration: {client_name: 'Independent'}});
   const other = redeem(active, otherGrant);
   assert.throws(() => refresh(active, grant.client, initial.refresh_token), fault(400, 'invalid_grant'));
-  assert.equal(active.authenticate(latest.access_token), null);
-  assert.throws(() => refresh(active, grant.client, latest.refresh_token), fault(400, 'invalid_grant'));
+  assert.equal(active.authenticate(current.access_token), null);
+  assert.throws(() => refresh(active, grant.client, current.refresh_token), fault(400, 'invalid_grant'));
   assert.equal(active.authenticate(other.access_token), otherGrant.client.client_id);
 });
 
