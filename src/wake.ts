@@ -33,10 +33,29 @@ export function wakeDeferred(config: WakeConfig, name: string, now = Date.now())
 }
 interface WakeOptions {
   alive?: (identity: string) => boolean; issued?: (ticket: WakeTicket) => void; registeredContact?: (ticket: WakeTicket) => boolean; save?: (config: WakeConfig) => void; contact?: (name: string) => number; active?: (name: string) => boolean; failed?: (name: string, jobId?: string, identity?: string) => void; jobContact?: (id: string | undefined) => boolean; jobFinished?: (id: string | undefined) => boolean; needed?: (name: string, identity: string) => boolean; waiting?: (name: string, identity: string) => boolean; mediaPending?: (ticket: WakeTicket) => boolean }
-interface WakeInput { nonce: string; picker_receipt?: PickerReceipt; ok?: boolean; url?: string; error?: string; stage?: string; permissions?: {connector: string; option: string}[] }
+interface WakeInput { nonce: string; picker_receipt?: PickerReceipt; ok?: boolean; url?: string; error?: string; stage?: string; diagnostic?: unknown; permissions?: {connector: string; option: string}[] }
 // Store only fixed diagnostic identifiers, never page text or browser errors.
 const failureCodes = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mode_unconfirmed', 'level_unconfirmed', 'level_unavailable', 'permission_unconfirmed', 'upload_unconfirmed', 'upload_failed', 'composer_not_empty', 'mention_unconfirmed', 'send_unconfirmed', 'claim_refused', 'expired', 'browser_error', 'rate_limited']);
 const failureStages = new Set(['loading', 'create', 'attach', 'activate', 'load', 'upload', 'enter', 'observe', 'result', 'claim', 'input', 'ready', 'registration', 'modelFocus', 'picker', 'prefillModel', 'sliderFocus', 'editorFocus', 'mention', 'resolved', 'send', 'uploadInput', 'uploads']);
+// Keep only bounded observations in authenticated status; never retain URLs,
+// prompt text, nonces or free-form browser diagnostics from the extension.
+function failureDiagnostic(value: unknown) {
+  if (!object(value)) return undefined;
+  const out: Record<string,string|number|boolean> = {};
+  if (typeof value.checkpoint === 'string' && ['tab_wait','probe_result','probe_binding','before_send','prefill_model','registration_wait','registration_probe'].includes(value.checkpoint)) out.checkpoint=value.checkpoint;
+  if (typeof value.status === 'string' && ['complete','loading','missing','other'].includes(value.status)) out.status=value.status;
+  for (const key of ['current','pending']) {
+    const uri = object(value[key]) ? value[key].uri_class : undefined;
+    if (typeof uri === 'string' && ['missing','blank','root','native_q','native_prompt','root_other_query','conversation','login','foreign','other'].includes(uri)) out[key]=uri;
+  }
+  if (object(value.model)) {
+    for(const key of ['models','menus','selected','sliders','minimum','maximum','position']) {
+      const v=value.model[key];if(typeof v==='number'&&Number.isInteger(v)&&v>=-1&&v<=8) out['model_'+key]=v;
+    }
+    for(const key of ['rowMatches','statusMatches']) if(typeof value.model[key]==='boolean') out['model_'+key]=value.model[key];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 export class Wakes {
   declare config: WakeConfig; declare now: () => number; declare save: (config: WakeConfig) => void; declare contact: (name: string) => number; declare active: (name: string) => boolean;
   declare failed: (name: string, jobId?: string, identity?: string) => void; declare jobContact: (id: string | undefined) => boolean; declare jobFinished: (id: string | undefined) => boolean;
@@ -186,6 +205,7 @@ export class Wakes {
       } else this.failure(ticket, 'failed', input.error === 'rate_limited');
       ticket.failure_code = failureCodes.has(input.error ?? '') ? input.error : 'browser_error';
       if (failureStages.has(input.stage ?? '')) ticket.failure_stage = input.stage;
+      ticket.failure_diagnostic = failureDiagnostic(input.diagnostic);
       return { ok: true };
     }
     check(ticket.state === 'claimed' && this.registered(ticket), 'Wake must be claimed and polling before confirmation', 409);
@@ -375,5 +395,5 @@ export class Wakes {
     }
     return { ok: true };
   }
-  status() { this.prune(); return [...this.tickets.values()].map(t => ({ label: t.label, state: t.state, error: t.error ?? null, ...(t.permissions ? {permissions: t.permissions} : {}), ...(t.failure_code ? {failure_code: t.failure_code} : {}), ...(t.failure_stage ? {failure_stage: t.failure_stage} : {}) })); }
+  status() { this.prune(); return [...this.tickets.values()].map(t => ({ label: t.label, state: t.state, error: t.error ?? null, ...(t.permissions ? {permissions: t.permissions} : {}), ...(t.failure_code ? {failure_code: t.failure_code} : {}), ...(t.failure_stage ? {failure_stage: t.failure_stage} : {}), ...(t.failure_diagnostic ? {failure_diagnostic:t.failure_diagnostic} : {}) })); }
 }

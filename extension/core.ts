@@ -1033,7 +1033,9 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           try { const current = await browser.tabs.get(tab.id); if (savedChatURL(current.url)) newURL = current.url; } catch {}
         }
         const reason = reasons.has((error as Error | undefined)?.message ?? '') ? (error as Error).message : 'browser_error';
-        try { await request(config, '/extension/result', {nonce: (ticket as Ticket).nonce, ok: false, error: reason, stage, ...(permissions.length ? {permissions} : {}), ...(!native && newURL ? {url: newURL} : {})}, fetcher); } catch { /* Never retry an uncertain wake. */ }
+        try { await request(config, '/extension/result', {nonce: (ticket as Ticket).nonce, ok: false, error: reason, stage,
+          ...(wakeDiagnostic ? {diagnostic:safeWakeDiagnostic(wakeDiagnostic,reason,now())} : {}),
+          ...(permissions.length ? {permissions} : {}), ...(!native && newURL ? {url: newURL} : {})}, fetcher); } catch { /* Never retry an uncertain wake. */ }
         if (ordinary && ['loading','prefillModel','registration'].includes(stage) && wakeDiagnostic) {
           await persistWakeDiagnostic(browser, wakeDiagnostic, reason, now());
         }

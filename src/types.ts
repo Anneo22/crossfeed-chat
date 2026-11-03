@@ -61,7 +61,7 @@ export interface WakeTicket {
   type?: string; job_id?: string; attachments?: FileDescriptor[]; retain_until?: number; error?: string | null;
   url?: string; chat_url?: string; issued_at?: number; contact?: number; claimed?: boolean; cleanupReceived?: boolean; picker_receipt?: PickerReceipt;
   permissions?: {connector: string; option: string}[];
-  failure_code?: string; failure_stage?: string;
+  failure_code?: string; failure_stage?: string; failure_diagnostic?: Record<string, string | number | boolean>;
 }
 export interface CallContext { client?: string; signal?: AbortSignal }
 export interface ToolSchema { type?: string; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown }

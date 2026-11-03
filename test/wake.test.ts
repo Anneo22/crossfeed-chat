@@ -15,6 +15,13 @@ function fixture(extra: Record<string, any> = {}) {
   return { config, wakes, writes, failures, begin, confirm, poll, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
+test('failure status retains only bounded diagnostic observations, never raw page data', () => {
+  const f=fixture(),t=f.begin()!;
+  f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic:{checkpoint:'prefill_model',status:'complete',current:{uri_class:'root',url:'private'},pending:{uri_class:'private'},nonce:'private',model:{models:1,menus:1,position:1,maximum:4,rowMatches:true,statusMatches:false,text:'private',selected:100}}});
+  const status=f.wakes.status()[0];
+  assert.deepEqual(status.failure_diagnostic,{checkpoint:'prefill_model',status:'complete',current:'root',model_models:1,model_menus:1,model_position:1,model_maximum:4,model_rowMatches:true,model_statusMatches:false});
+  assert(!JSON.stringify(status).includes('private'));
+});
 test('one issued wake at a time; queued tickets get a fresh four-minute window', () => {
   const f = fixture(); const first = f.begin(); f.wakes.enqueue('other');
   assert.equal(f.wakes.next().ticket, null);
