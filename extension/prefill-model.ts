@@ -24,12 +24,15 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     return true;
   };
   if (ticket.type === 'composer' || ticket.wake_mode === 'native' || !Number.isInteger(expectedMaximum) || expectedMaximum < 0 || expectedMaximum > 4 || !Number.isInteger(ticket.level) || ticket.level < 0 || ticket.level > expectedMaximum) return {verified: false, error: 'level_unconfirmed'};
+  let diagnostic: NonNullable<PrefillModelResult['diagnostic']> = {action, models:0, menus:0};
+  const fail = (error: string): PrefillModelResult => ({verified:false,error,diagnostic});
   let model: HTMLElement | undefined, ownedMenu: HTMLElement | undefined;
   while (Date.now() < deadline) {
-    if (!authorized()) return {verified: false, error: 'page_changed'};
+    if (!authorized()) return fail('page_changed');
     const models = all(document, 'button[aria-label="Select ChatGPT model"], [data-testid="model-switcher-dropdown-button"]');
     const menus = all(document, '[role="menu"]');
-    if (models.length > 1 || menus.length > 1) return {verified: false, error: 'level_unconfirmed'};
+    diagnostic = {action, models:Math.min(8,models.length), menus:Math.min(8,menus.length)};
+    if (models.length > 1 || menus.length > 1) return fail('level_unconfirmed');
     if (model && (models.length !== 1 || models[0] !== model)) return {verified: false, error: 'page_changed'};
     if (models.length === 1) {
       model = models[0];
@@ -46,12 +49,15 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
         const rows = [...ownedMenu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];
         const selected = rows.filter(row => row.getAttribute('aria-checked') === 'true');
         const sliders = all(ownedMenu, '[role="slider"]');
+        Object.assign(diagnostic,{selected:Math.min(8,selected.length),sliders:Math.min(8,sliders.length)});
         if (selected.length === 1 && sliders.length === 1) {
           const row = selected[0], slider = sliders[0];
           const exactRow = text(row) === ticket.row || all(row, 'span').some(span => text(span) === ticket.row);
           const position = slider.getAttribute('aria-valuenow');
           const status = all(ownedMenu, '[role="status"]').map(text).filter(value => / of /i.test(value));
-          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum)) return {verified: false, error: 'level_unconfirmed'};
+          const bounded = (value: string | null) => value !== null && /^[0-4]$/.test(value) ? Number(value) : -1;
+          Object.assign(diagnostic,{rowMatches:exactRow,minimum:bounded(slider.getAttribute('aria-valuemin')),maximum:bounded(slider.getAttribute('aria-valuemax')),position:bounded(position),statusMatches:status.length===1&&status[0]===`${levels[ticket.level]}, ${ticket.level+1} of ${expectedMaximum+1}.`});
+          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum)) return fail('level_unconfirmed');
           // Thumb and announcement hydrate independently. Wait for exact
           // agreement, never change the selection or accept a stale proof.
           if (position === String(ticket.level) && status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
@@ -61,5 +67,5 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     }
     await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(pollMs, deadline - Date.now()))));
   }
-  return {verified: false, error: 'level_unconfirmed'};
+  return fail('level_unconfirmed');
 }

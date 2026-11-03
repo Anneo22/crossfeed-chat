@@ -36,7 +36,7 @@ function ordinaryWakePhase(value: unknown, prompt: string): -1 | 0 | 1 | 2 {
   return key === 'q' ? 0 : 1;
 }
 
-const wakeDiagnosticCheckpoints = new Set(['tab_wait', 'probe_result', 'probe_binding', 'before_send']);
+const wakeDiagnosticCheckpoints = new Set(['tab_wait', 'probe_result', 'probe_binding', 'before_send', 'prefill_model', 'registration_wait', 'registration_probe']);
 const wakeDiagnosticStatuses = new Set(['complete', 'loading', 'missing', 'other']);
 const wakeDiagnosticURIClasses = new Set(['missing', 'blank', 'native_q', 'native_prompt', 'root', 'root_other_query', 'login', 'conversation', 'foreign', 'other']);
 const wakeDiagnosticQueryNames = new Set(['q', 'prompt', 'model', 'temporary-chat', 'hints', 'ref', 'utm_source', 'utm_campaign', 'other']);
@@ -128,6 +128,16 @@ function safeWakeDiagnostic(candidate: unknown, failureCode: string, timestamp: 
   };
   if (input.probe_location && typeof input.probe_location === 'object') {
     Object.assign(output, {probe_location: safeWakeURLDiagnostic(input.probe_location)});
+  }
+  if (input.model && typeof input.model === 'object') {
+    const model = input.model as Record<string, unknown>, safe: Record<string, boolean | number | string> = {};
+    if (model.action === 'point' || model.action === 'observe') safe.action = model.action;
+    for (const key of ['models','menus','selected','sliders','minimum','maximum','position']) {
+      const value = model[key];
+      if (typeof value === 'number' && Number.isInteger(value) && value >= -1 && value <= 8) safe[key] = value;
+    }
+    for (const key of ['rowMatches','statusMatches']) if (typeof model[key] === 'boolean') safe[key] = model[key];
+    Object.assign(output,{model:safe});
   }
   return output;
 }
@@ -653,6 +663,8 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
             const [value]: Injection<PrefillModelResult>[] = await pageScript({
               target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args,
             });
+            wakeDiagnostic = {checkpoint:'prefill_model', ...wakeTabDiagnostic(current,prompt), probe:probeState,
+              model:value?.result?.diagnostic ?? {action,models:value?.result?.ready?1:0,menus:value?.result?.open?1:0}};
             if (value?.documentId !== documentId || value?.result?.error === 'page_changed') throw Error('page_changed');
             if (!value?.result || action === 'point' && value.result.ready !== true) throw Error('level_unconfirmed');
             return value.result;
@@ -721,6 +733,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         while (now() < activeTicket.expires_at) {
           stage = 'registration';
           let current = await getOwnedTab();
+          wakeDiagnostic = {checkpoint:'registration_wait',...wakeTabDiagnostic(current,prompt),probe:probeState};
           if (newURL && (current.url !== newURL || current.pendingUrl || !['complete', 'loading'].includes(current.status ?? ''))) throw Error('page_changed');
           // A ChatGPT page that is polling tools keeps reporting 'loading'; DOM authority, not the load flag, decides (as before send).
           while (now() < activeTicket.expires_at && (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') ||
@@ -729,6 +742,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
                 current.url && ordinaryWakePhase(current.url, prompt) < 0 && !savedChatURL(current.url) && !pendingChatURL(current.url)) throw Error('page_changed');
             await pause(200);
             current = await getOwnedTab();
+            wakeDiagnostic = {checkpoint:'registration_wait',...wakeTabDiagnostic(current,prompt),probe:probeState};
           }
           if (!validTicket(activeTicket, now())) throw Error('expired');
           if (current.pendingUrl || !savedChatURL(current.url)) throw Error('page_changed');
@@ -738,6 +752,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           const registrationArgs: [PageTicket, 'registration'] = [pageTicket, 'registration'];
           const registrationTarget = registrationDocumentId ?
             {tabId: activeTab.id, documentIds: [registrationDocumentId]} : {tabId: activeTab.id};
+          wakeDiagnostic = {checkpoint:'registration_probe',...wakeTabDiagnostic(current,prompt),probe:probeState};
           const registrationRuns: Injection<PageProbe>[] = await pageScript({
             target: registrationTarget, func: pageWake, args: registrationArgs,
           });
@@ -1019,7 +1034,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         }
         const reason = reasons.has((error as Error | undefined)?.message ?? '') ? (error as Error).message : 'browser_error';
         try { await request(config, '/extension/result', {nonce: (ticket as Ticket).nonce, ok: false, error: reason, stage, ...(permissions.length ? {permissions} : {}), ...(!native && newURL ? {url: newURL} : {})}, fetcher); } catch { /* Never retry an uncertain wake. */ }
-        if (ordinary && !sent && stage === 'loading' && wakeDiagnostic) {
+        if (ordinary && ['loading','prefillModel','registration'].includes(stage) && wakeDiagnostic) {
           await persistWakeDiagnostic(browser, wakeDiagnostic, reason, now());
         }
       }

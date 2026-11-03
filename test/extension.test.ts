@@ -214,7 +214,7 @@ function workerFixture(options: Record<string, any> = {}) {
         const isPoint = opts.args[4] === 'point';
         return [{documentId: options.postPrefillDocumentChanged ? 'changed-document' : 'prefill-document',
           result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(8),open:pickerOpen} :
-            options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed'} :
+            options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed',diagnostic:options.postPrefillModelDiagnostic} :
             {verified: true, row: value.row, level: value.level, maximum: opts.args[1]}}];
       }
       if (opts.func === prefillWake) {
@@ -410,6 +410,14 @@ const wakeDiagnostic = (f: any) => {
   return {raw: values[0], value: JSON.parse(values[0].slice(wakeMarker.length))};
 };
 
+test('post-prefill model diagnostics retain bounded observations, not page text or wake identifiers', async () => {
+  const f=workerFixture({wakeMode:'configured',postPrefillModelMismatch:true,
+    postPrefillModelDiagnostic:{action:'observe',models:1,menus:1,selected:1,sliders:1,rowMatches:true,minimum:0,maximum:4,position:1,statusMatches:false,raw:'private',status:'private',nonce:'private'}});
+  await run(f);const {raw,value}=wakeDiagnostic(f);
+  assert.equal(value.checkpoint,'prefill_model');assert(!raw.includes('private'));
+  assert.deepEqual(value.model,{action:'observe',models:1,menus:1,selected:1,sliders:1,minimum:0,maximum:4,position:1,rowMatches:true,statusMatches:false});
+  assert.equal(prefillCount(f),0);
+});
 test('ordinary wake uses exact native prefill, one page send attempt and no debugger or picker input', async () => {
   const f = workerFixture({allow: true}); await run(f);
   const command = ordinaryPrompt(ticket());
