@@ -142,6 +142,7 @@ function workerFixture(options: Record<string, any> = {}) {
         const promptWake = 'https://chatgpt.com/?prompt=' + encodeURIComponent(phrase);
         const plusWake = (key: string) => 'https://chatgpt.com/?' + new URLSearchParams([[key, phrase]]).toString();
         if (!sent) {
+          if (options.postPrefillForeign && events.some(e=>e.modelProof)) return {id:7,windowId:8,status:'complete',url:'https://evil.example/'};
           const n = tabReads++;
           if (options.beforeSendLoading && events.some(e => e.probe)) return {id:7,windowId:options.tabWindowId ?? 8,status:'loading',url:options.preSendNavigation==='q'?createdURL:'https://chatgpt.com/',
             ...(options.beforeSendPending ? {pendingUrl:'https://evil.example/'} : {})};
@@ -186,6 +187,7 @@ function workerFixture(options: Record<string, any> = {}) {
           if (params.x === 5) { if (options.linger) options.approvedLinger = 3; else options.allow = false; }
           if (params.x === 7) options.menuOpen = true;
           if (params.x === 6 && ++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
+          if (params.x === 8 && !options.prefillPickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
           if (['ArrowLeft', 'ArrowRight'].includes(params.key)) { previousPosition = position; lastKeyAt = clock; }
@@ -209,8 +211,10 @@ function workerFixture(options: Record<string, any> = {}) {
       }
       if (opts.func === prefillModel) {
         events.push({modelProof: {target: opts.target, args: opts.args}});
+        const isPoint = opts.args[4] === 'point';
         return [{documentId: options.postPrefillDocumentChanged ? 'changed-document' : 'prefill-document',
-          result: options.postPrefillModelMismatch ? {verified: false, error: 'level_unconfirmed'} :
+          result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(8),open:pickerOpen} :
+            options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed'} :
             {verified: true, row: value.row, level: value.level, maximum: opts.args[1]}}];
       }
       if (opts.func === prefillWake) {
@@ -336,6 +340,28 @@ test('configured ordinary wake tolerates a restored root draft without typing or
   assert.equal(new URL(navigation.url).searchParams.get('q'), ordinaryPrompt({...ticket(), wake_mode: 'configured' as any}));
 });
 
+test('configured native proof uses trusted input in the fresh renderer before re-observing the picker', async () => {
+  const f = workerFixture({wakeMode:'configured'}); await run(f);
+  const navigation=f.events.findIndex(e=>e.update);
+  const post=f.events.slice(navigation+1);
+  const attach=post.findIndex(e=>e.attach), focus=post.findIndex(e=>e.method==='Emulation.setFocusEmulationEnabled');
+  const pointer=post.findIndex(e=>e.params?.x===8&&e.params.type==='mousePressed');
+  const proof=post.findIndex(e=>e.modelProof?.args[4]==='observe');
+  assert(attach>=0&&focus>attach&&pointer>focus&&proof>pointer);
+  assert(post.findIndex(e=>e.params?.key==='Escape')>proof);
+  for(let i=0;i<post.length;i++) if(post[i].method?.startsWith('Input.')) {
+    assert.equal(post[i-1].modelProof?.args[4],'point');
+    assert.deepEqual(post[i-1].modelProof.target.documentIds,['prefill-document']);
+  }
+  assert.equal(prefillCount(f),1);assert.equal(enterCount(f),0);
+});
+test('configured native proof refuses a missing target or ignored trusted input without sending', async () => {
+  for(const options of [{prefillPointMissing:true},{prefillPickerNeverOpens:true},{postPrefillForeign:true}]) {
+    const f=workerFixture({wakeMode:'configured',...options});await run(f);
+    assert.equal(prefillCount(f),0);assert.equal(enterCount(f),0);
+    assert.equal(f.events.find(e=>e.path==='/extension/result')?.body?.stage,'prefillModel');
+  }
+});
 test('configured prefill refuses changed model or document before its single send', async () => {
   for (const options of [{postPrefillModelMismatch: true}, {postPrefillDocumentChanged: true}]) {
     const f = workerFixture({wakeMode: 'configured', occupied: true, ...options}); await run(f);

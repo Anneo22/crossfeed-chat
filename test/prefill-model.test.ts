@@ -6,66 +6,57 @@ const globals: any = globalThis;
 const ticket = () => ({nonce:'a'.repeat(32),label:'wake-'+'a'.repeat(32),connector:'Crossfeed Chat',row:'Latest',level:2,expires_at:Date.now()+60000});
 const prompt = (t:ReturnType<typeof ticket>) => `@${t.connector} wake up. First gateway_exchange: worker_label=${JSON.stringify(t.label)} exactly as issued, wake_nonce=${JSON.stringify(t.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(t.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
 function fixture(options:Record<string,any>={}) {
-  let open=false, clicks=0, modelReads=0, statusReads=0, sliderReads=0;
-  const toggle=()=>{clicks++;open=!open;if(options.foreignAfterClick)globals.location.href='https://evil.example/';};
-  const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[]});
+  let modelReads=0, statusReads=0, sliderReads=0;
+  const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[],getBoundingClientRect:()=>({x:10,y:20,width:40,height:30}),click:()=>assert.fail('page proof must not synthesize click'),dispatchEvent:()=>assert.fail('page proof must not synthesize pointer input')});
   const row=node(options.row??'Latest',{'aria-checked':'true'});
   const slider=node('',{'aria-valuemin':options.minimum??'0','aria-valuemax':options.maximum??'2','aria-valuenow':options.position??'2'});
   const status=node(options.status??'High, 3 of 3.');
   const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
   const model=node('',options.disabled?{'aria-disabled':'true'}:{});
-  model.click=()=>{if(!options.pointerOnly)toggle();};
-  model.dispatchEvent=(event:any)=>{
-    assert.equal(event.type,'pointerdown');assert.equal(event.button,0);
-    assert.equal(event.pointerType,'mouse');assert.equal(event.bubbles,true);
-    toggle();return true;
-  };
-  const doc={querySelectorAll:(selector:string)=>selector.includes('model-switcher')?(options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model]):selector==='[role="menu"]'&&open?(options.duplicateMenu?[menu,menu]:[menu]):[]};
-  return {doc,clicks:()=>clicks};
+  const doc={querySelectorAll:(selector:string)=>selector.includes('model-switcher')?(options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model]):selector==='[role="menu"]'&&options.open!==false?(options.duplicateMenu?[menu,menu]:[menu]):[]};
+  return doc;
 }
 async function run(options:Record<string,any>={},fn=prefillModel) {
-  const t={...ticket(),level:options.level??2},f=fixture(options),keys=['document','location','PointerEvent'],previous=keys.map(k=>Object.getOwnPropertyDescriptor(globalThis,k));
-  globals.PointerEvent=class {constructor(type:string,init:any){Object.assign(this,{type},init);}};
-  globals.document=f.doc;globals.location={href:options.url??'https://chatgpt.com/?q='+encodeURIComponent(prompt(t))};
-  try {return {result:await fn(t,options.expectedMaximum??2,options.timeoutMs??10,1),clicks:f.clicks()};}
+  const t={...ticket(),level:options.level??2},keys=['document','location'],previous=keys.map(k=>Object.getOwnPropertyDescriptor(globalThis,k));
+  globals.document=fixture(options);globals.location={href:options.url??'https://chatgpt.com/?q='+encodeURIComponent(prompt(t))};
+  try {return await fn(t,options.expectedMaximum??2,options.timeoutMs??10,1,options.action??'observe');}
   finally {keys.forEach((key,i)=>previous[i]?Object.defineProperty(globalThis,key,previous[i]!):delete globals[key]);}
 }
-test('configured prefill re-observes the exact selected row and High2 of three, without changing it',async()=>{
-  assert.deepEqual(await run(),{result:{verified:true,row:'Latest',level:2,maximum:2},clicks:2});
-});
-test('configured Pro proof opens and closes the pointerdown-only native model trigger',async()=>{
-  assert.deepEqual(await run({pointerOnly:true,level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',timeoutMs:100}),
-    {result:{verified:true,row:'Latest',level:4,maximum:4},clicks:2});
+test('configured prefill re-observes the host-opened exact row and High2 without page input',async()=>{
+  assert.deepEqual(await run(),{verified:true,row:'Latest',level:2,maximum:2});
 });
 test('configured model proof waits for the picker trigger after the composer has hydrated',async()=>{
-  const value=await run({delayedModelReads:2,timeoutMs:500});
-  assert.deepEqual(value,{result:{verified:true,row:'Latest',level:2,maximum:2},clicks:2});
+  assert.deepEqual(await run({delayedModelReads:2,timeoutMs:500}),{verified:true,row:'Latest',level:2,maximum:2});
+});
+test('configured Pro proof requires host-opened menu, never synthesizes pointer/click input',async()=>{
+  const pro={level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.'};
+  assert.equal((await run({...pro,open:false})).verified,false);
+  assert.deepEqual(await run(pro),{verified:true,row:'Latest',level:4,maximum:4});
+});
+test('configured model pointer target is read-only, unique and pinned to the authorized URL',async()=>{
+  assert.deepEqual(await run({action:'point',open:false,delayedModelReads:2,timeoutMs:500}),{verified:false,ready:true,modelPoint:{x:30,y:35},open:false});
+  assert.equal((await run({action:'point',open:true})).open,true);
+  for(const options of [{duplicateModel:true},{duplicateMenu:true},{disabled:true},{url:'https://evil.example/'}])
+    assert.notEqual((await run({...options,action:'point'})).ready,true);
 });
 test('configured Pro proof waits for the native picker announcement to catch up',async()=>{
-  const value=await run({level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',statusLagReads:2,staleStatus:'Extra High, 4 of 5.',timeoutMs:500});
-  assert.deepEqual(value,{result:{verified:true,row:'Latest',level:4,maximum:4},clicks:2});
+  assert.deepEqual(await run({level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',statusLagReads:2,staleStatus:'Extra High, 4 of 5.',timeoutMs:500}),{verified:true,row:'Latest',level:4,maximum:4});
 });
 test('configured native proof waits for a hydrated old thumb to settle to the requested level',async()=>{
-  const value=await run({positionLagReads:2,stalePosition:'1',timeoutMs:500});
-  assert.deepEqual(value,{result:{verified:true,row:'Latest',level:2,maximum:2},clicks:2});
+  assert.deepEqual(await run({positionLagReads:2,stalePosition:'1',timeoutMs:500}),{verified:true,row:'Latest',level:2,maximum:2});
 });
-test('configured model proof never clicks when the trigger stays missing',async()=>{
-  const value=await run({noModel:true});assert.equal(value.result.verified,false);assert.equal(value.clicks,0);
+test('configured model proof refuses when the trigger stays missing',async()=>{
+  assert.equal((await run({noModel:true})).verified,false);
 });
 test('configured model proof is self-contained when serialized for executeScript',async()=>{
   const serialized=new Function('return ('+prefillModel.toString()+')')();
-  assert.equal((await run({},serialized)).result.verified,true);
+  assert.equal((await run({},serialized)).verified,true);
 });
 test('configured prefill refuses wrong row, level, bounds, status and ambiguous controls',async()=>{
-  for(const options of [{row:'Other'},{position:'1'},{minimum:'1'},{maximum:'4'},{status:'High, 3 of 5.'},{duplicateRow:true},{duplicateModel:true},{duplicateMenu:true},{disabled:true}]) {
-    const {result}=await run(options);assert.equal(result.verified,false,JSON.stringify(options));
-  }
+  for(const options of [{row:'Other'},{position:'1'},{minimum:'1'},{maximum:'4'},{status:'High, 3 of 5.'},{duplicateRow:true},{duplicateModel:true},{duplicateMenu:true},{disabled:true}])
+    assert.equal((await run(options)).verified,false,JSON.stringify(options));
 });
-test('configured model proof refuses foreign or extra-query URLs before touching picker',async()=>{
-  for(const url of ['https://evil.example/','https://chatgpt.com/?q=other','https://chatgpt.com/?q=x&model=x','https://chatgpt.com/?temporary-chat=true','https://chatgpt.com/c/existing']) {
-    const value=await run({url});assert.equal(value.result.verified,false);assert.equal(value.clicks,0);
-  }
-});
-test('navigation during model proof refuses and does not toggle a foreign document',async()=>{
-  const value=await run({foreignAfterClick:true});assert.equal(value.result.verified,false);assert.equal(value.clicks,1);
+test('configured model proof refuses foreign or extra-query URLs',async()=>{
+  for(const url of ['https://evil.example/','https://chatgpt.com/?q=other','https://chatgpt.com/?q=x&model=x','https://chatgpt.com/?temporary-chat=true','https://chatgpt.com/c/existing'])
+    assert.equal((await run({url})).verified,false);
 });

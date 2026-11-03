@@ -644,15 +644,48 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           // A configured wake must retain the actual saved picker selection
           // across native navigation; never silently fall back to defaults.
           stage = 'prefillModel';
-          const modelArgs: [PageTicket, number, number] = [pageTicket, expectedMaximum, Math.max(1, Math.min(5000, activeTicket.expires_at - now()))];
-          const modelRuns: Injection<PrefillModelResult>[] = await pageScript({
-            target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args: modelArgs,
-          });
-          const model = modelRuns[0];
-          if (model?.documentId !== documentId) throw Error('page_changed');
-          if (model?.result?.verified !== true || model.result.row !== activeTicket.row ||
-              model.result.level !== activeTicket.level || model.result.maximum !== expectedMaximum)
-            throw Error(model?.result?.error === 'rate_limited' ? 'rate_limited' : 'level_unconfirmed');
+          const modelRead = async (action: 'point' | 'observe'): Promise<PrefillModelResult> => {
+            const current = await getOwnedTab(), phase = ordinaryWakePhase(current.url, prompt);
+            if (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') || phase < nativePhase) throw Error('page_changed');
+            nativePhase = phase;
+            const args: [PageTicket, number, number, number, 'point' | 'observe'] =
+              [pageTicket, expectedMaximum, Math.max(1, Math.min(5000, activeTicket.expires_at - now())), 50, action];
+            const [value]: Injection<PrefillModelResult>[] = await pageScript({
+              target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args,
+            });
+            if (value?.documentId !== documentId || value?.result?.error === 'page_changed') throw Error('page_changed');
+            if (!value?.result || action === 'point' && value.result.ready !== true) throw Error('level_unconfirmed');
+            return value.result;
+          };
+          // A fresh renderer needs trusted pointer input, just like initial
+          // selection. HTMLElement.click() does not open the native trigger;
+          // synthetic pointerdown can also be ignored until focus is emulated.
+          // Every input is guarded by owned-tab URL and pinned-document proof.
+          if ((await modelRead('point')).open) throw Error('level_unconfirmed');
+          await browser.debugger.attach({tabId: activeTab.id}, '1.3'); attached = true;
+          await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});
+          const input = async (method: string, params: Record<string, unknown>) => {
+            await modelRead('point');
+            await browser.debugger.sendCommand({tabId: activeTab.id}, method, params);
+          };
+          const openDeadline = Math.min(activeTicket.expires_at, now() + 5000);
+          while (!(await modelRead('point')).open) {
+            if (now() >= openDeadline) throw Error('level_unconfirmed');
+            const p = (await modelRead('point')).modelPoint;
+            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('level_unconfirmed');
+            for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+              await input('Input.dispatchMouseEvent', {type, x: p.x, y: p.y, ...(type !== 'mouseMoved' ? {button: 'left', clickCount: 1} : {})});
+            }
+            await pause(100);
+          }
+          const model = await modelRead('observe');
+          if (model.verified !== true || model.row !== activeTicket.row ||
+              model.level !== activeTicket.level || model.maximum !== expectedMaximum) throw Error('level_unconfirmed');
+          for (const type of ['keyDown', 'keyUp']) {
+            await input('Input.dispatchKeyEvent', {type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+          }
+          if ((await modelRead('point')).open) throw Error('level_unconfirmed');
+          await browser.debugger.detach({tabId: activeTab.id}); attached = false;
         }
 
         // Revalidate URL/ticket immediately before the only send-capable call.

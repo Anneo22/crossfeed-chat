@@ -73,7 +73,7 @@ export interface PrefillLocationDiagnostic {
   prompt_matches: boolean;
 }
 export interface PrefillProbeResult { ready: boolean; error?: string; phase?: 0 | 1 | 2; diagnostic?: PrefillLocationDiagnostic }
-export interface PrefillModelResult { verified: boolean; error?: string; row?: string; level?: number; maximum?: number }
+export interface PrefillModelResult { verified: boolean; error?: string; row?: string; level?: number; maximum?: number; ready?: boolean; modelPoint?: Point; open?: boolean }
 export interface PrefillWakeResult { sent: boolean; error?: string; url?: string }
 export type PageAction = 'ready' | 'registration' | 'modelFocus' | 'picker' | 'sliderFocus' | 'editorFocus' | 'mention' | 'resolved' | 'send' | 'uploadInput' | 'uploads' | 'discardOwnDraft' | 'discardBareMention';
 /** Each action returns a subset; consumers verify the needed members. */
