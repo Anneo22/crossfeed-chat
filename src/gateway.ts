@@ -121,6 +121,8 @@ interface GatewayOptions {
   picker?: (name: string, id?: string) => PickerReceipt | null; records?: JobState; save?: (state: JobState) => void; quota?: (name: string) => void;
 }
 export class Gateway {
+  onFinished: (job: Job) => boolean = () => false;
+  retentionTimer: ReturnType<typeof setInterval>;
   declare config: GatewayConfig; declare now: () => number; declare timeoutMs: number; declare pollMs: number; declare unclaimedMs: number; declare startupMs: number; declare leaseMs: number;
   declare waitForWake: boolean; declare extensionLastActivity?: () => number | undefined; declare extensionTicketUntil?: () => number | undefined; declare extensionGraceMs: number; declare audit: (job: JobRecord) => void; declare authorizeWorker: (identity: string, wakeNonce?: string, jobId?: string) => void; declare expireWake: (identity: string, nonce?: string) => void; declare saveBindings: (bindings: Record<string,string>) => void;
   declare wake: (name: string, scope?: string, title?: string) => void; declare files?: Files; declare composer: (job: Job) => void; declare picker: (name: string, id?: string) => PickerReceipt | null;
@@ -157,8 +159,12 @@ export class Gateway {
       if (!job.finished && job.state === 'claimed') this.deliveryLost(job, 'the host restarted after the worker claimed it');
       else if (!job.finished && (!job.caller || !!job.scope) && job.key === undefined && !job.retry_keys?.length) this.finish(job, new Fault(499, 'caller_cancelled', 'Unkeyed caller was lost on restart'));
     }
+    // Startup must erase expired payloads on disk too, even with no later requests.
+    if (records.jobs.some(row => row.finished && row.expires <= this.now())) this.save({version: 1, jobs: [...this.jobs.values()].map(j => this.record(j))});
     this.prune();
     for (const job of this.jobs.values()) if (!job.finished) this.arm(job);
+    this.retentionTimer = setInterval(() => {try {this.prune();} catch {this.stopWaiters();}}, 60000);
+    this.retentionTimer.unref();
   }
   waiter(record: JobRecord): Job {
     const job = record as Job;
@@ -269,11 +275,15 @@ export class Gateway {
   }
   stopWaiters() {
     this.closed = true;
+    clearInterval(this.retentionTimer);
     for (const job of this.jobs.values()) { clearTimeout(job.timer); clearTimeout(job.claimTimer); clearTimeout(job.leaseTimer); job.cleanup?.(); if (!job.finished) job.reject(new Fault(503, 'state_unavailable', 'State write failed; restart the host before retrying with the same key')); }
     for (const worker of this.workers.values()) worker.notify?.();
   }
   prune() {
     const now = this.now();
+    const expired = [...this.jobs.values()].filter(j => j.finished && j.expires <= now);
+    // Commit the reduced store before forgetting payloads in memory; failed writes retry.
+    if (expired.length) this.save({version: 1, jobs: [...this.jobs.values()].filter(j => !expired.includes(j)).map(j => this.record(j))});
     for (const [id, j] of this.jobs) {
       if (!this.waitForWake && !j.finished && j.state === 'queued' && this.blocked(j.label)) this.finish(j, new Fault(429, 'quota_blocked', 'Worker label is paused by a ChatGPT quota limit'));
       this.checkQueuedLiveness(j);
@@ -448,6 +458,10 @@ export class Gateway {
     clearTimeout(job.timer); clearTimeout(job.claimTimer); clearTimeout(job.leaseTimer); job.cleanup?.();
     const w = this.workers.get(job.delivery === 'composer' ? `\0composer:${job.id}` : job.worker ?? job.label);
     if (w?.active === job) w.active = null;
+    try { if (this.onFinished(job) && w) {w.revoked = true; w.stale = true;} } catch {
+      // Durable tracked-chat reconciliation retries failed cleanup bookkeeping.
+      if (w) {w.revoked = true; w.stale = true;}
+    }
     if (job.delivery === 'composer') this.workers.delete(`\0composer:${job.id}`);
     if (error) job.reject(error);
     else job.resolve(result!);
@@ -512,7 +526,8 @@ export class Gateway {
         if (w) check(!w.active && !this.workerAwake(w), 'Worker conversation is still active',409);
       }
     }
-    const authorizedFreshWake = !!(scope && w?.revoked && args.wake_nonce !== w.wake_nonce && conversation !== w.conversation);
+    const authorizedFreshWake = !!(w?.revoked && args.wake_nonce && args.wake_nonce !== w.wake_nonce && (!scope || conversation !== w.conversation));
+    if (authorizedFreshWake) this.authorizeWorker(identity, args.wake_nonce, exact ? target!.id : undefined);
     if (conversation) check(![...this.workers].some(([key,worker]) => key !== workerKey && worker.conversation === conversation), 'Conversation already belongs to another worker',409);
     if (w?.conversation && conversation && w.conversation !== conversation) check(!w.active && !this.workerAwake(w), 'Worker conversation is still active',409);
     if (conversation) {
@@ -650,6 +665,7 @@ export class Gateway {
   }
   close() {
     this.closed = true;
+    clearInterval(this.retentionTimer);
     for (const j of this.jobs.values()) if (!j.finished) {
       if (j.state === 'queued' && (j.key !== undefined || !!j.caller)) { clearTimeout(j.timer); clearTimeout(j.claimTimer); j.cleanup?.(); j.reject(new Fault(503, 'host_stopped', 'Host stopped; retry with the same key after restart')); }
       else { try { if (j.state === 'claimed') this.deliveryLost(j, 'the host stopped while the worker was answering'); else this.finish(j, new Fault(503, 'host_stopped', 'Host stopped')); } catch { this.stopWaiters(); } }

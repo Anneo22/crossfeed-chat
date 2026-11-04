@@ -111,6 +111,16 @@ async function startApp(options: AppOptions, release: () => void) {
     waiting: (name,identity) => [...gateway.jobs.values()].some(j => !j.finished && j.state === 'queued' && j.label === name && j.scope === workerRoute(config,identity).scope && j.delivery !== 'composer'),
     needed: (name,identity) => !gateway.workers.get(identity)?.polling && !gateway.workers.get(identity)?.active && gateway.capacity().claimed < gateway.capacity().limit && [...gateway.jobs.values()].filter(j => !j.finished && j.state === "queued" && j.label === name && j.scope === workerRoute(config,identity).scope && j.delivery !== "composer").length > gateway.idleWorkers(name,workerRoute(config,identity).scope),
   });
+  gateway.onFinished = job => {
+    const identity = job.delivery === 'composer' ? [...wakes.tickets.values()].find(t => t.job_id === job.id)?.label : job.worker;
+    if (identity) return wakes.finishJob(identity, job.delivery === 'composer' ? job.id : undefined);
+    // Cancellation before assignment must also retire the abandoned waking attempt.
+    if (![...gateway.jobs.values()].some(j => !j.finished && j.label === job.label && j.scope === job.scope)) {
+      for (const t of wakes.tickets.values()) if (['queued','issued','claimed'].includes(t.state) &&
+        (t.routing_label ?? t.label) === job.label && workerRoute(config,t.label).scope === job.scope) wakes.finishJob(t.label, t.job_id);
+    }
+    return false;
+  };
   // A pending serialized wake protects ALL cold scopes through its fixed ticket
   // lifetime and one grace period, without authorizing any other scope to claim it.
   gateway.extensionTicketUntil = () => Math.max(-Infinity, ...[...wakes.tickets.values()]
@@ -271,7 +281,7 @@ async function startApp(options: AppOptions, release: () => void) {
       !recent ? 'no_extension_contact' :
       [...wakes.tickets.values()].some(ticket => ['issued','claimed'].includes(ticket.state)) ? 'serialized_wake' : 'awaiting_worker';
     const startup = {scoped_queued: scoped.length, cold_scoped_queued: scoped.length, budget_ms: gateway.startupMs, blocker};
-    return { focus_guard: {attempts: focusAttempts, counts: {...focusCounts}, last: focusLast}, wake_receiver: receiver, extension_poll: {last_seen_at: receiver.last_seen_at, last_contact_at: receiver.last_contact_at, recent, grace_ms: gateway.extensionGraceMs}, startup, host_checks, workers, wakes: wakes.status(), registration_open: oauth.window > oauth.now(), approvals: oauth.list(), capacity, extension_enabled: pairing.enabled, extension_pairings: pairing.list(), attachment_delivery: config.attachment_delivery, host_available: !gateway.closed, receipts_available: !gateway.auditUnavailable, jobs: [...gateway.jobs.values()].map(job => ({id: job.id, label: job.label, state: job.state, error: job.error?.code ?? null})), wake_limits: limits, chat_disposal: {mode: config.chat_disposal, queued: config.wake_state!.archives.length, tracked: (config.wake_state!.started_chats ?? []).length, last_sweep: wakes.lastSweep}, ...(bridge ? { bridge: bridge.status() } : {}) };
+    return { focus_guard: {attempts: focusAttempts, counts: {...focusCounts}, last: focusLast}, wake_receiver: receiver, extension_poll: {last_seen_at: receiver.last_seen_at, last_contact_at: receiver.last_contact_at, recent, grace_ms: gateway.extensionGraceMs}, startup, host_checks, workers, wakes: wakes.status(), registration_open: oauth.window > oauth.now(), approvals: oauth.list(), capacity, extension_enabled: pairing.enabled, extension_pairings: pairing.list(), attachment_delivery: config.attachment_delivery, host_available: !gateway.closed, receipts_available: !gateway.auditUnavailable, jobs: [...gateway.jobs.values()].map(job => ({id: job.id, label: job.label, state: job.state, error: job.error?.code ?? null})), wake_limits: limits, chat_disposal: wakes.disposalStatus(), ...(bridge ? { bridge: bridge.status() } : {}) };
   };
   const handler = (kind: 'local' | 'public') => async (req: IncomingMessage, res: ServerResponse) => {
     let rpc: RPC | undefined;

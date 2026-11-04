@@ -263,13 +263,13 @@ test('composer selects Attach files while unrelated photo and video inputs remai
   await inPage(f, () => assert.deepEqual(pageWake(ticket(), 'uploadInput'), {ready: true, uploadSelector: 'form input[type="file"][aria-label="Attach files"]'}));
 });
 
-test('delete disposal marks the archive lease and archive stays the default', () => {
+test('disposal always deletes and untracked leases require verification even with legacy settings', () => {
   for (const disposal of [undefined, 'archive', 'delete'] as const) {
     const config: WakeConfig = {connector: 'Crossfeed', labels: {sol: {row: 'Latest', level: 2}}, ...(disposal ? {chat_disposal: disposal} : {}),
       wake_state: {wakes: [], failed: {}, cooldown_until: 0, archives: ['https://chatgpt.com/c/old'], ...(disposal === 'delete' ? {started_chats: ['https://chatgpt.com/c/old']} : {})}};
     const lease = new Wakes(config).archiveNext().archive!;
     assert.equal(lease.url, 'https://chatgpt.com/c/old');
-    assert.equal(lease.remove === true, disposal === 'delete');
+    assert.equal(lease.remove, true); assert.equal(lease.verify, disposal === 'delete' ? undefined : true);
   }
 });
 

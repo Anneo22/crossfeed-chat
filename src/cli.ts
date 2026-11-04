@@ -10,7 +10,7 @@ const help = `Crossfeed Chat
   serve --public-url https://your-tunnel.example --connector Crossfeed
         [--api-port 4319] [--mcp-port 4320] [--state-dir PATH]
         [--job-deadline-ms 1800000] [--worker-lease-ms MS, default: job deadline] [--max-claimed-jobs 4] [--wake-daily-cap 0, off] [--wake-hourly-cap 12]
-        [--attachment-delivery mcp|composer] [--chat-disposal archive|delete] [--no-audio-transcription] [--speech-locale en-US]
+        [--attachment-delivery mcp|composer] [--chat-disposal delete, deprecated] [--no-audio-transcription] [--speech-locale en-US]
         [--workbench ROOT ...] [--workbench-commands JSON_FILE]
         [--workbench-shell sandboxed|full] [--workbench-network]
         [--workbench-guards SETTINGS_FILE, default: ~/.claude/settings.json]
@@ -56,6 +56,7 @@ export function diagnose(status: ReturnType<App['status']>) {
   for (const approval of status.approvals) problems.push(`A connector is waiting for host approval. Next: run approve ${approval.id} if you requested this connection.`);
   if (status.wake_limits.blocked) problems.push(status.wake_limits.blocked);
   if (status.wake_limits.cooldown_until > Date.now()) problems.push('A saved global wake cooldown is active. Next: wait until the cooldown expires.');
+  if (status.chat_disposal?.queued || Number(status.chat_disposal?.last_sweep?.backlog) > 0 || Number(status.chat_disposal?.last_sweep?.errors) > 0 || Number(status.chat_disposal?.last_sweep?.pass_errors) > 0) problems.push(`Chat deletion has pending work (${status.chat_disposal.queued} queued). Next: keep the paired extension signed in and polling; inspect chat_disposal in status for sweep progress and errors.`);
   return problems;
 }
 
@@ -92,8 +93,7 @@ export async function main(argv: string[] = process.argv.slice(2), env: Record<s
     if (flags['wake-hourly-cap'] !== undefined) config.wake_hourly_cap = Number(flags['wake-hourly-cap']);
     config.wake_daily_cap = flags['wake-daily-cap'] === undefined ? 0 : Number(flags['wake-daily-cap']);
     if (flags['chat-disposal'] !== undefined) {
-      check(['archive', 'delete'].includes(flags['chat-disposal']), 'Chat disposal must be archive or delete');
-      config.chat_disposal = flags['chat-disposal'] as 'archive' | 'delete';
+      check(flags['chat-disposal'] === 'delete', 'Archive mode was removed; delete is the only chat disposal mode');
     }
     if (flags['attachment-delivery'] !== undefined) {
       check(['mcp', 'composer'].includes(flags['attachment-delivery']), 'Attachment delivery must be mcp or composer');

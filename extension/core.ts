@@ -192,33 +192,45 @@ async function chatgptToken(signal: AbortSignal): Promise<string | null> {
   return typeof token === 'string' && token ? token : null;
 }
 
-async function disposeConversation(token: string, id: string, remove: boolean, signal: AbortSignal): Promise<boolean> {
+async function disposeConversation(token: string, id: string, signal: AbortSignal): Promise<boolean> {
   const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {
     credentials: 'include', redirect: 'error', cache: 'no-store', signal, method: 'PATCH',
     headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
-    body: JSON.stringify(remove ? {is_visible: false} : {is_archived: true}),
+    body: JSON.stringify({is_visible: false}),
   });
   // A conversation that is already gone (owner or lead deleted it) is disposed: never retry it forever.
   return response.ok || response.status === 404;
 }
 
-/**
- * Run ChatGPT's archive request from the trusted extension service worker.
- */
-export async function archiveConversation(url: string, timeoutMs = 15000, remove = false): Promise<boolean> {
-  if (!savedChatURL(url)) return false;
+/** Delete through ChatGPT's signed-in endpoint. The legacy third argument is ignored. */
+export async function archiveConversation(url: string, timeoutMs = 15000, _remove = true): Promise<boolean> {
+  return (await deleteQueuedConversation(url, false, timeoutMs)).ok;
+}
+
+/** An untracked queue URL needs positive wake-signature proof before any mutation. */
+export async function deleteQueuedConversation(url: string, verify = false, timeoutMs = 15000): Promise<{ok: boolean; unproven?: true}> {
+  if (!savedChatURL(url)) return {ok: false};
   try {
     const signal = AbortSignal.timeout(timeoutMs);
     const token = await chatgptToken(signal);
-    if (!token) return false;
-    return await disposeConversation(token, new URL(url).pathname.split('/').at(-1) as string, remove, signal);
-  } catch { return false; }
+    if (!token) return {ok: false};
+    const id = new URL(url).pathname.split('/').at(-1) as string;
+    if (verify) {
+      const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {
+        credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers: {Authorization: 'Bearer ' + token},
+      });
+      if (response.status === 404) return {ok: true};
+      if (!response.ok) return {ok: false};
+      if (!isWakeSignature(firstUserText(await response.json()))) return {ok: false, unproven: true};
+    }
+    return {ok: await disposeConversation(token, id, signal)};
+  } catch { return {ok: false}; }
 }
 
 // The first user message of every wake chat starts with the connector chip, then one of three
 // fixed phrases (configured wake, native wake, composer job). Nothing else is ever swept.
 const chip = String.raw`(?:\[\$?[^\]\n]{1,80}\]\(app:\/\/[^)\s]{1,200}\)|[@$][A-Za-z0-9_.-]{1,80})`;
-const wakeSignature = new RegExp(String.raw`^\s*${chip}\s+(?:wake up as [^\s]{1,160}\s*$|wake up\. First gateway_exchange: worker_label=|process exactly job [A-Za-z0-9_-]{1,64} as [^\n]{1,200}?\. Call gateway_exchange with worker_label=)`);
+const wakeSignature = new RegExp(String.raw`^\s*${chip}\s+(?:wake up as [^\s]{1,160}\s*$|wake up as ([A-Za-z0-9_~.-]{1,160})\. Poll gateway_exchange with worker_label \1 until released\.\s*$|wake up\. First gateway_exchange: worker_label=|process exactly job [A-Za-z0-9_-]{1,64} as [^\n]{1,200}?\. Call gateway_exchange with worker_label=)`);
 export function isWakeSignature(text: unknown): boolean { return typeof text === 'string' && text.length <= 4000 && wakeSignature.test(text); }
 
 /**
@@ -246,54 +258,118 @@ function createdAt(value: unknown): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-const sweepEveryMs = 600000, sweepMinAgeMs = 600000, sweepChecked = 500, sweepPerRun = 10;
-/**
- * Delete wake chats nobody recorded or released (extension reloaded mid-wake, service state lost). A conversation is
- * touched only if the service says no ticket, label, session or queue entry holds it AND its first message is a wake
- * message. Every other conversation of the owner is only listed, never changed.
- */
+const sweepEveryMs = 600000, sweepMinAgeMs = 600000, sweepChecked = 5000, sweepPerRun = 30;
+const sweepFloor = Date.parse('2026-09-15T00:00:00Z');
+const passKeys = ['wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived'] as const;
+type SweepCandidate = {id: string; created_at: number; matched?: boolean};
+type SweepCursor = {archived: boolean; offset: number; pending: SweepCandidate[]; next_offset: number; end: boolean};
+/** Resume a bounded pass through both listings. Only approved, proven wake messages are deleted. */
 export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fetcher: Fetcher = fetch, now: () => number = Date.now): Promise<void> {
   const store = browser.storage?.local as any;
   if (typeof store?.get !== 'function' || typeof store?.set !== 'function') return;
   const previous = ((await store.get(['crossfeedSweep'])) ?? {}).crossfeedSweep ?? {};
-  if (typeof previous.at === 'number' && now() - previous.at < sweepEveryMs) return;
-  const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string') : []);
-  const report = {at: now(), listed: 0, candidates: 0, approved: 0, deleted: 0, error: ''};
-  // Record the attempt first: a failing sweep must not run on every 30-second poll.
-  await store.set({crossfeedSweep: {...report, checked: [...checked]}});
-  const deleted: string[] = [];
-  let sweepApproved = false;
+  if (previous.pass_complete === true && previous.backlog === 0 && previous.errors === 0 &&
+    (previous.pass_errors ?? previous.errors) === 0 && previous.pass_wake_matches_visible === 0 && previous.pass_wake_matches_archived === 0 && now() - previous.at < sweepEveryMs) return;
+  const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string').slice(-sweepChecked) : []);
+  let cursor: SweepCursor = previous.cursor && !previous.pass_complete ? structuredClone(previous.cursor) : {archived: false, offset: 0, pending: [], next_offset: 0, end: false};
+  const continuing = !!previous.cursor && !previous.pass_complete;
+  const report: Record<string, number | boolean> = {at: now(), listed_visible: 0, listed_archived: 0, candidates: 0, approved: 0,
+    wake_matches_visible: 0, wake_matches_archived: 0, deleted_visible: 0, deleted_archived: 0, errors: 0, pass_complete: false, backlog: 1,
+    pass_started_at: continuing ? previous.pass_started_at : now()};
+  for (const key of passKeys) {report['pass_' + key] = continuing ? previous['pass_' + key] ?? 0 : 0; report['last_pass_' + key] = previous['last_pass_' + key] ?? 0;}
+  report.pass_errors = continuing ? previous.pass_errors ?? 0 : 0;
+  report.last_pass_errors = previous.last_pass_errors ?? 0;
+  report.last_pass_started_at = previous.last_pass_started_at ?? 0;
+  report.last_pass_completed_at = previous.last_pass_completed_at ?? 0;
+  const save = async () => store.set({crossfeedSweep: {...report, cursor, checked: [...checked].slice(-sweepChecked)}});
+  await save();
+  const started = now(), signal = AbortSignal.timeout(20000);
+  let details = 0, pages = 0;
+  const withinBudget = () => !signal.aborted && now() - started < 20000 && details < sweepPerRun && pages < 10;
   try {
-    const signal = AbortSignal.timeout(20000);
     const token = await chatgptToken(signal);
     if (!token) throw Error('no_session');
     const headers = {Authorization: 'Bearer ' + token};
-    const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=0&limit=100&order=created&is_archived=false', {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
-    if (!listing.ok) throw Error('list_' + listing.status);
-    const items = (await listing.json())?.items;
-    if (!Array.isArray(items)) throw Error('list_shape');
-    report.listed = items.length;
-    const candidates = items.flatMap((item: any) => {
-      const created = createdAt(item?.create_time);
-      return typeof item?.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item.id) && created !== null && now() - created >= sweepMinAgeMs && !checked.has(item.id) ? [{id: item.id, created_at: created}] : [];
-    });
-    report.candidates = candidates.length;
-    if (candidates.length) {
-      const { dispose } = await request(config, '/extension/sweep', {candidates}, fetcher) as {dispose?: string[]};
-      sweepApproved = true;
-      const approved = Array.isArray(dispose) ? dispose.filter(id => candidates.some((c: {id: string}) => c.id === id)).slice(0, sweepPerRun) : [];
-      report.approved = approved.length;
-      for (const id of approved) {
-        const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
-        if (!response.ok) continue;
-        if (!isWakeSignature(firstUserText(await response.json()))) { checked.add(id); continue; }
-        if (await disposeConversation(token, id, true, signal)) deleted.push(id);
+    while (withinBudget()) {
+      const side = cursor.archived ? 'archived' : 'visible';
+      if (!cursor.pending.length) {
+        if (cursor.end) {
+          if (cursor.archived) {report.pass_complete = true; break;}
+          cursor = {archived: true, offset: 0, pending: [], next_offset: 0, end: false};
+          continue;
+        }
+        cursor.offset = cursor.next_offset;
+        const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=' + cursor.offset + '&limit=100&order=created&is_archived=' + cursor.archived,
+          {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
+        if (!listing.ok) throw Error('list_failed');
+        const items = (await listing.json())?.items;
+        if (!Array.isArray(items)) throw Error('list_shape');
+        pages++;
+        report['listed_' + side] = Number(report['listed_' + side]) + items.length;
+        // Offset counts remaining rows: successful deletions below reduce it, avoiding skipped rows.
+        cursor.next_offset = cursor.offset + items.length;
+        cursor.end = items.length < 100;
+        for (const item of items) {
+          const created = createdAt(item?.create_time);
+          if (created !== null && created < sweepFloor) {cursor.end = true; break;}
+          if (typeof item?.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item.id) && created !== null &&
+            created >= sweepFloor && now() - created >= sweepMinAgeMs && !checked.has(item.id)) cursor.pending.push({id: item.id, created_at: created});
+        }
+        await save();
+        if (!cursor.pending.length) continue;
+      }
+      const candidates = cursor.pending.slice(0, sweepPerRun - details);
+      report.candidates = Number(report.candidates) + candidates.length;
+      const {dispose} = await request(config, '/extension/sweep', {candidates: candidates.map(({id, created_at}) => ({id, created_at}))}, fetcher) as {dispose?: string[]};
+      if (!Array.isArray(dispose)) throw Error('approval_shape');
+      const approved = new Set(dispose.filter(id => candidates.some(c => c.id === id)));
+      report.approved = Number(report.approved) + approved.size;
+      for (const candidate of candidates) {
+        if (!withinBudget()) break;
+        const {id} = candidate;
+        if (approved.has(id)) {
+          details++;
+          try {
+            const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
+            if (!response.ok && response.status !== 404) throw Error('detail_failed');
+            if (response.status !== 404) {
+              const first = firstUserText(await response.json());
+              if (!first) throw Error('unreadable_message');
+              if (!isWakeSignature(first)) checked.add(id);
+              else {
+                const match = 'wake_matches_' + side, deleted = 'deleted_' + side;
+                if (!candidate.matched) {
+                  candidate.matched = true;
+                  report[match] = Number(report[match]) + 1; report['pass_' + match] = Number(report['pass_' + match]) + 1;
+                }
+                if (!await disposeConversation(token, id, signal)) throw Error('delete_failed');
+                report[deleted] = Number(report[deleted]) + 1; report['pass_' + deleted] = Number(report['pass_' + deleted]) + 1;
+                cursor.next_offset = Math.max(cursor.offset, cursor.next_offset - 1);
+              }
+            } else cursor.next_offset = Math.max(cursor.offset, cursor.next_offset - 1);
+          } catch {
+            report.errors = Number(report.errors) + 1;
+            // Do not let one inaccessible chat starve the rest. It remains eligible next pass.
+            if (signal.aborted || now() - started >= 20000) break;
+          }
+        }
+        cursor.pending.shift();
+        await save();
       }
     }
-  } catch (error) { report.error = String((error as Error)?.message ?? error).slice(0, 40); }
-  report.deleted = deleted.length;
-  try { if (sweepApproved) await request(config, '/extension/sweep/done', {deleted}, fetcher); } catch { /* the bounded receiver lease expires if reporting fails */ }
-  await store.set({crossfeedSweep: {...report, checked: [...checked].slice(-sweepChecked)}});
+    // Finishing the last allowed detail need not require an otherwise empty extra poll.
+    if (!cursor.pending.length && cursor.end && cursor.archived) report.pass_complete = true;
+  } catch { if (!report.errors) report.errors = 1; }
+  report.pass_errors = Number(report.pass_errors) + Number(report.errors);
+  if (report.pass_complete) {
+    report.last_pass_errors = report.pass_errors;
+    report.last_pass_started_at = report.pass_started_at;
+    report.last_pass_completed_at = now();
+    for (const key of passKeys) report['last_pass_' + key] = report['pass_' + key];
+  }
+  report.backlog = report.pass_complete ? 0 : Math.max(1, cursor.pending.length);
+  try { await request(config, '/extension/sweep/done', report, fetcher); } catch {report.errors = Number(report.errors) + 1; report.pass_errors = Number(report.pass_errors) + 1;}
+  await save();
 }
 
 // Cosmetic and best-effort: a missing tabGroups permission (granted only by a full Chrome reload
@@ -480,8 +556,8 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         const { archive } = await request(config, '/extension/archive/next', undefined, fetcher);
         if (!archive) { await sweepWakeChats(config, browser, fetcher, now); return; }
         if (!validTicket({ ...archive, label: 'archive', connector: 'archive', row: 'archive', level: 0 }, now()) || !savedChatURL(archive.url)) throw Error('invalid_ticket');
-        const ok = await archiveConversation(archive.url, 15000, archive.remove === true);
-        await request(config, '/extension/archive/result', {nonce: archive.nonce, ok}, fetcher);
+        const outcome = await deleteQueuedConversation(archive.url, archive.verify === true);
+        await request(config, '/extension/archive/result', {nonce: archive.nonce, ...outcome}, fetcher);
         return;
       }
       if (!validTicket(ticket, now())) throw Error('invalid_ticket');

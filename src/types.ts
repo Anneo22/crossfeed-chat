@@ -1,12 +1,13 @@
 // Host domain records. JSON boundaries remain validated by their original runtime checks.
 export interface WorkerSettings { row: string; level: number; wake_mode?: 'configured' | 'native'; url?: string; replicas?: number; replica_urls?: Record<string, string> }
 export interface PickerReceipt { row: string; level: number; source?: string; observed_at?: number }
-export interface WakeState { worker_modes?: Record<string, 'configured' | 'native'>; wakes: number[]; failed: Record<string, number>; failed_attempts?: Record<string, number>; cooldown_until: number; archives: string[]; started_chats?: string[]; chat_started_at?: Record<string, number> }
+export interface SweepCounters { [key: string]: number | boolean }
+export interface WakeState { unproven_dropped?: number; disposal_queued_at?: Record<string, number>; last_sweep?: SweepCounters; worker_modes?: Record<string, 'configured' | 'native'>; wakes: number[]; failed: Record<string, number>; failed_attempts?: Record<string, number>; cooldown_until: number; archives: string[]; started_chats?: string[]; chat_started_at?: Record<string, number> }
 export interface SessionWorker { label: string; scope: string; url?: string }
 export interface Config {
   prefix: string; connector: string; labels: Record<string, WorkerSettings>; public_url?: string;
   quota_until?: Record<string, number>; quota_pause_until?: number; job_deadline_ms?: number;
-  max_claimed_jobs?: number; worker_lease_ms?: number; wake_daily_cap?: number; wake_hourly_cap?: number; chat_disposal?: 'archive' | 'delete';
+  max_claimed_jobs?: number; worker_lease_ms?: number; wake_daily_cap?: number; wake_hourly_cap?: number;
   session_workers?: Record<string, SessionWorker>; conversation_bindings?: Record<string,string>;
   attachment_delivery?: 'mcp' | 'composer'; wake_state?: WakeState;
   /** Explicit approved pairing ID which alone receives extension work; unset is legacy routing. */

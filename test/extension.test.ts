@@ -1003,7 +1003,7 @@ test('page actions refuse changed location and wrong mode', async () => {
   });
 });
 
-test('service-worker archive and delete requests use the signed-in session and reject non-worker URLs', async () => {
+test('service-worker disposal always deletes using the signed-in session and reject non-worker URLs', async () => {
   for (const remove of [false, true]) {
     await inPage({}, async () => {
       const calls: any[] = [];
@@ -1016,7 +1016,7 @@ test('service-worker archive and delete requests use the signed-in session and r
       assert.equal(calls[1].url, 'https://chatgpt.com/backend-api/conversation/old');
       assert.equal(calls.every(call => call.init.credentials === 'include' && call.init.redirect === 'error'), true);
       assert.equal(calls[1].init.headers.Authorization, 'Bearer worker-only-token');
-      assert.deepEqual(JSON.parse(calls[1].init.body), remove ? {is_visible: false} : {is_archived: true});
+      assert.deepEqual(JSON.parse(calls[1].init.body), {is_visible: false});
       assert.equal(await archiveConversation('https://evil.example/c/old', 15000, remove), false);
       assert.equal(calls.length, 2);
     });
@@ -1365,7 +1365,7 @@ test('a service that refuses the early chat record never fails the wake itself',
   assert.equal(f.events.find((e: any) => e.path === '/extension/result').body.ok, true);
 });
 
-test('P7: archiving a conversation that is already gone counts as done; other failures still retry', async () => {
+test('P7: deleting a conversation that is already gone counts as done; other failures still retry', async () => {
   const calls: any[] = [];
   const replies: Record<string, number> = {gone: 404, boom: 500, fine: 200};
   await inPage({}, async () => {
@@ -1380,7 +1380,7 @@ test('P7: archiving a conversation that is already gone counts as done; other fa
     assert.equal(await archiveConversation('https://chatgpt.com/c/fine', 15000, false), true);
   });
   const patches = calls.filter(c => c.init?.method === 'PATCH');
-  assert.deepEqual(patches.map(c => JSON.parse(c.init.body)), [{is_visible: false}, {is_visible: false}, {is_archived: true}]);
+  assert.deepEqual(patches.map(c => JSON.parse(c.init.body)), [{is_visible: false}, {is_visible: false}, {is_visible: false}]);
 });
 
 test('wake signature matches exactly the three first messages Crossfeed sends and nothing a person writes', () => {
@@ -1427,7 +1427,8 @@ function sweepFixture(options: {service?: (candidates: any[]) => string[]; chats
     if (url.endsWith('/api/auth/session')) return {ok: true, json: async () => ({accessToken: 'tok'})};
     if (url.includes('/backend-api/conversations?')) {
       if (options.failList) return {ok: false, status: options.failList};
-      return {ok: true, json: async () => ({items: Object.entries(options.chats).map(([id, c]) => ({id, title: 'x', create_time: c.created}))})};
+      const u = new URL(url);
+      return {ok: true, json: async () => ({items: u.searchParams.get('is_archived') === 'true' ? [] : Object.entries(options.chats).map(([id, c]) => ({id, title: 'x', create_time: c.created})).slice(Number(u.searchParams.get('offset')), Number(u.searchParams.get('offset')) + 100)})};
     }
     const id = url.split('/').at(-1)!;
     if (init.method === 'PATCH') { patches.push({id, body: JSON.parse(init.body)}); return {ok: true, status: 200}; }
@@ -1452,31 +1453,34 @@ test('sweep deletes only approved, old conversations whose first message is a wa
   const asked = fixture.serviceCalls.find(c => c.path === '/extension/sweep').body.candidates.map((c: any) => c.id);
   assert.deepEqual(asked.sort(), ['denied', 'lookalike', 'orphanwake', 'ownerchat', 'unreadable'], 'a young chat is not even offered');
   assert.equal(fixture.calls.some(c => c.includes('/conversation/denied')), false, 'a chat the service did not approve is never opened');
-  assert.deepEqual(fixture.serviceCalls.find(c => c.path === '/extension/sweep/done').body, {deleted: ['orphanwake']});
+  const report = fixture.serviceCalls.find(c => c.path === '/extension/sweep/done').body;
+  assert.equal(report.deleted_visible, 1); assert.equal(report.deleted_archived, 0); assert.equal(report.errors, 1);
   const saved = fixture.store.crossfeedSweep;
   assert.deepEqual(saved.checked.sort(), ['lookalike', 'ownerchat'], 'non-wake chats are never read twice; unreadable ones are retried');
-  assert.equal(saved.deleted, 1); assert.equal(saved.error, '');
+  assert.equal(saved.deleted_visible, 1); assert.equal(saved.errors, 1);
 });
 
 test('approved sweep reports done even when no chat can be deleted', async () => {
   for (const entry of [{first:'Personal conversation'}, {first:wakeFirst,fetchStatus:500}]) {
-    const fixture = sweepFixture({chats:{candidate:{created:1,...entry}}});
+    const fixture = sweepFixture({chats:{candidate:{created:'2026-10-01T00:00:00Z',...entry}}});
     await fixture.run();
     assert.deepEqual(fixture.patches, []);
-    assert.deepEqual(fixture.serviceCalls.find(c => c.path === '/extension/sweep/done')?.body, {deleted:[]});
+    assert.equal(fixture.serviceCalls.find(c => c.path === '/extension/sweep/done')?.body.deleted_visible, 0);
   }
 });
 
-test('sweep runs at most every ten minutes, remembers what it already read, and survives a listing failure', async () => {
+test('sweep retries a backlog on idle polls, throttles empty complete passes and remembers checked chats', async () => {
   const f = sweepFixture({chats: {}, failList: 429});
   await f.run();
-  assert.equal(f.store.crossfeedSweep.error, 'list_429');
+  assert.equal(f.store.crossfeedSweep.errors, 1); assert.ok(f.store.crossfeedSweep.backlog > 0);
   const calls = f.calls.length; await f.run();
-  assert.equal(f.calls.length, calls, 'throttled even after a failure');
+  assert.ok(f.calls.length > calls, 'backlog retries on the next idle poll');
   f.advance(600001);
   const g = sweepFixture({chats: {}, store: {crossfeedSweep: {at: 1, checked: ['seen']}}});
   await g.run(); assert(g.calls.some(c => c.startsWith('GET /backend-api/conversations')));
-  assert.equal(g.serviceCalls.length, 0, 'no candidates, nothing to ask');
+  assert.equal(g.serviceCalls.filter(c => c.path === '/extension/sweep').length, 0, 'no candidates, nothing to approve');
+  assert.equal(g.serviceCalls.at(-1).body.pass_complete, true);
+  const emptyCalls = g.calls.length; await g.run(); assert.equal(g.calls.length, emptyCalls, 'empty completed pass throttles');
   assert.deepEqual(g.store.crossfeedSweep.checked, ['seen']);
   // No storage API, no sweep, no crash.
   await inPage({}, async () => { globals.fetch = async () => { throw Error('must not be called'); }; await sweepWakeChats({apiURL: 'http://127.0.0.1:4319', key: 'k'} as any, {} as any, (async () => ({})) as any, Date.now); });

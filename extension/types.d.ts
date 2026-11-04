@@ -21,7 +21,7 @@ export type PageTicket = TicketFields & (
   {type?: undefined; job_id?: undefined; attachments?: undefined} |
   {type: 'composer'; job_id: string; attachments: AttachmentMetadata[]}
 );
-export interface ArchiveTicket { nonce: string; url: string; expires_at: number; remove?: boolean }
+export interface ArchiveTicket { nonce: string; url: string; expires_at: number; remove: true; verify?: true }
 export interface APIConfig { apiURL: string; key: string }
 export interface APIReply {
   /** Untrusted until validTicket narrows it in the poller. */

@@ -10,7 +10,7 @@ const GRACE = 120001;
 function fixture(extra: Record<string, any> = {}, alive = false) {
   let now = 1_000_000, contacts = 0, active = false, live = alive;
   const writes: any[] = [], liveSet = new Set<string>();
-  const config: WakeConfig = { wake_hourly_cap: 1000, connector: 'Crossfeed', chat_disposal: 'delete', labels: { sol: { row: 'Latest', level: 3 } }, ...extra };
+  const config: WakeConfig = { wake_hourly_cap: 1000, connector: 'Crossfeed', labels: { sol: { row: 'Latest', level: 3 } }, ...extra };
   const wakes = new Wakes(config, () => now, {
     save: (state: any) => writes.push(structuredClone(state)), contact: () => contacts, active: () => active,
     alive: identity => live || liveSet.has(identity),
@@ -62,11 +62,11 @@ test('P1: replica and session chats retire on their own identities and keep the 
   assert.equal(removed[0].remove, true);
 });
 
-test('P1: archive mode disposes the same chats by archiving them', () => {
+test('P1: a legacy archive setting cannot prevent direct deletion of tracked chats', () => {
   const f = fixture({ chat_disposal: 'archive' });
   f.confirm(f.begin(), 'arch'); f.advance(GRACE); f.wakes.reconcile(true);
   const lease = f.wakes.archiveNext().archive!;
-  assert.equal(lease.url, chat('arch')); assert.equal(lease.remove, undefined);
+  assert.equal(lease.url, chat('arch')); assert.equal(lease.remove, true); assert.equal(lease.verify, undefined);
 });
 
 test('P2/P3: the chat reported at creation is queued when the wake fails, expires, or is lost', () => {
@@ -152,13 +152,13 @@ test('P8: a ticket that expires while claimed and never reported a chat leaves n
   assert.deepEqual(queued(f), []); assert.deepEqual(f.config.wake_state!.started_chats ?? [], []);
 });
 
-test('reconcile is throttled and never touches an alive worker, a legacy untracked chat is only archived', () => {
+test('reconcile is throttled and never touches an alive worker, a legacy untracked chat needs signature proof', () => {
   const f = fixture({ labels: { sol: { row: 'Latest', level: 3, url: chat('legacy') } } });
   f.wakes.reconcile(); f.advance(GRACE);
   assert.equal(f.wakes.reconcile().retired, 1);
   assert.equal(f.wakes.reconcile().retired, 0, 'throttled inside 30 s');
   const lease = f.wakes.archiveNext().archive!;
-  assert.equal(lease.url, chat('legacy')); assert.equal(lease.remove, undefined, 'no ownership proof: archive, never delete');
+  assert.equal(lease.url, chat('legacy')); assert.equal(lease.remove, true); assert.equal(lease.verify, true, 'no ownership proof: verify first');
 });
 
 test('reconcile survives a failed save without corrupting the live configuration', () => {
@@ -182,7 +182,7 @@ test('sweepCheck approves only old chats that no label, session, queue entry or 
   assert.deepEqual(reply.dispose, ['orphan', 'also-orphan']);
   assert.ok(reply.min_age_ms >= 900000);
   const many = Array.from({ length: 30 }, (_, i) => ({ id: `o${i}`, created_at: old }));
-  assert.equal(f.wakes.sweepCheck({ candidates: many }).dispose.length, 10);
+  assert.equal(f.wakes.sweepCheck({ candidates: many }).dispose.length, 30);
   for (const bad of [{}, { candidates: 'x' }, { candidates: [{ id: '../x', created_at: 1 }] }, { candidates: [{ id: 'a', created_at: 1, extra: 1 }] }, { candidates: [], extra: 1 }])
     assert.throws(() => f.wakes.sweepCheck(bad), (e: any) => e.status === 400);
 });

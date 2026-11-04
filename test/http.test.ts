@@ -9,7 +9,7 @@ import { main } from '../src/cli.ts';
 import { hash, nonce } from '../src/security.ts';
 import { fakeHTTP } from './fake-http.ts';
 import type { TestResponse } from './fake-http.ts';
-import { makePoller, validTicket, request as extensionRequest } from '../extension/core.ts';
+import { makePoller, validTicket, archiveConversation, request as extensionRequest } from '../extension/core.ts';
 import { pageWake, prefillProbe, prefillWake } from '../extension/page.ts';
 import manifest from '../package.json' with { type: 'json' };
 
@@ -418,7 +418,7 @@ test('CLI saves, lists and removes worker rows and numeric levels with exact sta
   assert.equal((await f.call('/workers/add', {label: 'bad', row: 'Latest', level: '3'})).status, 400);
 });
 
-test('HTTP asleep-label completion wakes, claims, retains new chat and retries prior archive', async t => {
+test('HTTP asleep-label completion wakes, claims, deletes finished chat and retries prior deletion', async t => {
   const f = await fixture(t); const tokens = await f.connect();
   await f.call('/workers/add', {label: 'sol', row: 'Latest', level: 3});
   f.app.config.labels.sol.url = 'https://chatgpt.com/c/old';
@@ -441,7 +441,7 @@ test('HTTP asleep-label completion wakes, claims, retains new chat and retries p
   const answer = f.rpc(tokens.access_token, 'tools/call', {name: 'gateway_exchange', arguments: {worker_label: 'sol', request_id: work.request_id, claim_token: work.claim_token, response: 'Finished'}});
   assert.equal((await result).data.choices[0].message.content, 'Finished'); await answer;
   const disk = JSON.parse(await fs.readFile(f.directory + '/config.json', 'utf8'));
-  assert.equal(disk.labels.sol.url, 'https://chatgpt.com/c/new'); assert.deepEqual(disk.wake_state!.archives, [archive.url]);
+  assert.equal(disk.labels.sol.url, undefined); assert.deepEqual(disk.wake_state!.archives, [archive.url, 'https://chatgpt.com/c/new']);
 });
 
 test('extension wake failure retains held HTTP jobs and all new routes preserve authority', async t => {
@@ -999,7 +999,7 @@ test('extension queue transport claims wakes and retries archives with Chrome-sh
   }
 });
 
-test('HTTP replicas serve two concurrent callers with distinct wakes and durable chats', async t => {
+test('HTTP replicas serve two concurrent callers with distinct wakes and durable deletion queues', async t => {
   const f = await fixture(t, {gateway: {timeoutMs: 5000, pollMs: 5}}), tokens = await f.connect();
   assert.equal((await f.call('/workers/add', {label: 'sol', row: 'Latest', level: 3})).status, 200);
   assert.equal((await f.call('/workers/set', {label: 'sol', replicas: 2})).status, 200);
@@ -1036,10 +1036,12 @@ test('HTTP replicas serve two concurrent callers with distinct wakes and durable
   assert.deepEqual(replies.map(r => r.data.metadata.worker_identity), ['sol', 'sol~replica-2']);
   const disk = JSON.parse(await fs.readFile(f.directory + '/config.json', 'utf8'));
   assert.equal(disk.labels.sol.replicas, 2);
-  assert.equal(disk.labels.sol.url, 'https://chatgpt.com/c/replica-one');
-  assert.equal(disk.labels.sol.replica_urls['2'], 'https://chatgpt.com/c/replica-two');
+  assert.equal(disk.labels.sol.url, undefined);
+  assert.equal(disk.labels.sol.replica_urls, undefined);
+  assert.deepEqual(disk.wake_state.archives.sort(), ['https://chatgpt.com/c/replica-one', 'https://chatgpt.com/c/replica-two']);
   assert.equal((await f.call('/workers/set', {label: 'sol', replicas: 1})).status, 200);
-  assert.equal(f.app.config.labels.sol.replica_urls!['2'], 'https://chatgpt.com/c/replica-two');
+  assert.equal(f.app.config.labels.sol.replica_urls, undefined);
+  assert.ok(f.app.config.wake_state!.archives.includes('https://chatgpt.com/c/replica-two'));
 });
 
 test('HTTP extra replica wake guards preserve queued work for a healthy sibling', async t => {
@@ -1140,7 +1142,7 @@ test('wake checks distinguish a claimed MCP media job from ordinary contact and 
   if (value.state !== 'request') throw Error('No media claim');
   await f.app.gateway.exchange('connector', {worker_label: 'sol', request_id: value.request.request_id, claim_token: value.request.claim_token, response: 'observed'}, AbortSignal.abort());
   await pending;
-  assert.equal(f.app.wakes.check(ticket.nonce).media_pending, undefined);
+  assert.throws(() => f.app.wakes.check(ticket.nonce), (error: any) => error.status === 409, 'job completion ends the claimed wake');
 });
 
  test('public root health responds without exposing control state', async t => {
@@ -1221,8 +1223,8 @@ test('joining scoped HTTP work inherits the issued wake timestamp in its receipt
   assert(results.every(result => result.status === 503 && result.data.error.code === 'extension_unavailable'));
 });
 
-test('MCP atomic completion wait carries eight delayed local-tool continuations over production HTTP', {timeout:10000}, async t => {
-  const f = await fixture(t, {gateway:{timeoutMs:5000, pollMs:1000}}), tokens = await f.connect('tool_continuations');
+test('MCP eight delayed local-tool continuations use fresh chats and delete each finished conversation', {timeout:10000}, async t => {
+  const f = await fixture(t, {gateway:{timeoutMs:5000, pollMs:1}}), tokens = await f.connect('tool_continuations');
   await f.call('/workers/add', {label:'sol', row:'Latest', level:2});
   const toolSpec = {type:'function', function:{name:'lookup', parameters:{type:'object'}}};
   const toolCall = (id: string) => ({id, type:'function', function:{name:'lookup', arguments:'{"value":1}'}});
@@ -1231,41 +1233,39 @@ test('MCP atomic completion wait carries eight delayed local-tool continuations 
     {role:'assistant',content:null,tool_calls:[toolCall(`prior_${i}`)]},
     {role:'tool',content:`local result ${i}`,tool_call_id:`prior_${i}`},
   ];
-  const submit = (i: number) => f.call('/v1/chat/completions', {model:'chatgpt:sol', messages:messagesFor(i), tools:[toolSpec], tool_choice:'required'}, {headers:{'X-Crossfeed-Session':'pi-continuation-session'}});
-  let caller = submit(0);
-  while (!f.app.wakes.has('sol', undefined, null)) await new Promise(r => setTimeout(r, 1));
   const ext = (route: string, input?: any) => f.call(route, input ?? {}, {key:f.extensionSecret});
-  const ticket = (await ext('/extension/next')).data.ticket;
-  assert.equal((await ext('/extension/claim', {nonce:ticket.nonce})).status, 200);
-  const identity = f.app.wakes.tickets.get(ticket.nonce)!.label;
-  const exchange = (args: Record<string, any> = {}) => f.rpc(tokens.access_token, 'tools/call', {
-    name:'gateway_exchange', arguments:{worker_label:identity, wake_nonce:ticket.nonce, maximum_wait_seconds:1, ...args},
-    _meta:{'openai/session':'continuation-conversation'},
-  });
-  let workerWait = exchange();
   for (let i = 0; i < 8; i++) {
-    const reply = await workerWait;
-    assert.equal(reply.status, 200);
-    assert.equal(reply.data.result.isError, undefined);
+    const caller = f.call('/v1/chat/completions', {model:'chatgpt:sol', messages:messagesFor(i), tools:[toolSpec], tool_choice:'required'}, {headers:{'X-Crossfeed-Session':'pi-continuation-session'}});
+    while (!f.app.wakes.has('sol', undefined, null)) await new Promise(r => setTimeout(r, 1));
+    const ticket = (await ext('/extension/next')).data.ticket;
+    assert.equal((await ext('/extension/claim', {nonce:ticket.nonce})).status, 200);
+    const identity = f.app.wakes.tickets.get(ticket.nonce)!.label;
+    const exchange = (args: Record<string, any> = {}) => f.rpc(tokens.access_token, 'tools/call', {
+      name:'gateway_exchange', arguments:{worker_label:identity, wake_nonce:ticket.nonce, maximum_wait_seconds:1, ...args},
+      _meta:{'openai/session':'continuation-conversation-'+i},
+    });
+    const reply = await exchange();
+    assert.equal(reply.status, 200); assert.equal(reply.data.result.isError, undefined);
     const work = reply.data.result.structuredContent;
     assert.equal(work.state, 'request'); assert.equal(work.worker_label, identity);
     assert.deepEqual(work.request.messages, messagesFor(i));
-    if (i === 0) {
-      assert.equal((await ext('/extension/check', {nonce:ticket.nonce})).data.registered, true);
-      assert.equal((await ext('/extension/result', {nonce:ticket.nonce,ok:true,url:'https://chatgpt.com/c/tool-continuations'})).status, 200);
-    }
-    workerWait = exchange({request_id:work.request.request_id, claim_token:work.request.claim_token, tool_calls:[toolCall(`next_${i}`)]});
+    assert.equal((await ext('/extension/check', {nonce:ticket.nonce})).data.registered, true);
+    const chat = 'https://chatgpt.com/c/tool-continuations-'+i;
+    assert.equal((await ext('/extension/result', {nonce:ticket.nonce,ok:true,url:chat})).status, 200);
+    const workerWait = exchange({request_id:work.request.request_id, claim_token:work.request.claim_token, tool_calls:[toolCall(`next_${i}`)]});
     const completed = await caller;
-    assert.equal(completed.status, 200);
-    assert.equal(completed.data.metadata.worker_identity, identity);
+    assert.equal(completed.status, 200); assert.equal(completed.data.metadata.worker_identity, identity);
     assert.equal(completed.data.choices[0].finish_reason, 'tool_calls');
     assert.equal(completed.data.choices[0].message.tool_calls[0].id, `next_${i}`);
-    while (!f.app.gateway.workers.get(identity)?.polling) await new Promise(r => setTimeout(r, 1));
+    assert.equal((await workerWait).data.result.structuredContent.state, 'released');
+    const disposal = (await ext('/extension/archive/next')).data.archive;
+    assert.equal(disposal.url, chat); assert.equal(disposal.remove, true); assert.equal(disposal.verify, undefined);
+    assert.equal((await ext('/extension/archive/result', {nonce:disposal.nonce,ok:true})).status, 200);
     await new Promise(r => setTimeout(r, 5));
-    assert.equal(f.app.wakes.tickets.size, 1, 'warm tool continuations need no new wake');
-    if (i < 7) caller = submit(i + 1);
   }
-  assert.equal((await workerWait).data.result.structuredContent.state, 'idle');
+  assert.equal(f.app.wakes.tickets.size, 8, 'each completed job had its own fresh wake');
+  assert.deepEqual(f.app.config.wake_state!.archives, []);
+  assert.deepEqual(f.app.config.wake_state!.started_chats, []);
 });
 
 test('HTTP Pi without session correlation fails explicitly instead of borrowing a shared worker',async t=>{
@@ -1981,7 +1981,7 @@ test('session release queues only the caller own chats and refuses while its job
   const foreign = await f.call('/v1/sessions/release',{session:'orchestrator:someone-else'});
   assert.equal(foreign.status,200); assert.deepEqual(foreign.data,{released:0});
   const released = await f.call('/v1/sessions/release',{session});
-  assert.equal(released.status,200); assert.deepEqual(released.data,{released:1,queued:1});
+  assert.equal(released.status,200); assert.deepEqual(released.data,{released:1,queued:0}, 'cancellation already queued the chat before release');
   assert.deepEqual(f.app.config.wake_state!.archives,['https://chatgpt.com/c/mine']);
   assert.deepEqual(Object.keys(f.app.config.session_workers),[`sol~session-${'b'.repeat(22)}`]);
 });
@@ -2191,4 +2191,60 @@ test('stuck cosmetic focus is counted as timeout while a claimed ordinary wake s
   assert.equal(focus.attempts,1);
   assert.equal(focus.last.reason,'timeout');
   assert.equal(typeof focus.last.at_ms,'number');
+});
+
+test('no-trace: status exposes cleanup ages and primitive pass counters', async t => {
+  const f=await fixture(t);
+  const disposal=(await f.call('/status')).data.chat_disposal;
+  assert.equal(disposal.mode,'delete');
+  for(const key of ['queued','oldest_queued_age_ms','tracked','oldest_tracked_age_ms','unproven_dropped']) assert.equal(typeof disposal[key],'number',key);
+  const counters={at:Date.now(),listed_visible:1,listed_archived:2,candidates:3,approved:3,wake_matches_visible:1,wake_matches_archived:1,deleted_visible:1,deleted_archived:1,errors:0,pass_complete:true,backlog:0,pass_started_at:1,pass_wake_matches_visible:1,pass_wake_matches_archived:1,pass_deleted_visible:1,pass_deleted_archived:1,last_pass_started_at:1,last_pass_completed_at:Date.now(),last_pass_wake_matches_visible:1,last_pass_wake_matches_archived:1,last_pass_deleted_visible:1,last_pass_deleted_archived:1};
+  assert.equal((await f.call('/extension/sweep/done',counters,{key:f.extensionSecret})).status,200);
+  assert.deepEqual((await f.call('/status')).data.chat_disposal.last_sweep,counters);
+  assert.equal((await f.call('/extension/sweep/done',{...counters,text:'must not be retained'},{key:f.extensionSecret})).status,400);
+});
+
+for(const outcome of ['success','cancel','timeout']) test('no-trace: a tracked worker chat is queued when its job ends: '+outcome,async t=>{
+  const f=await fixture(t,{gateway:{timeoutMs:200,pollMs:1}});
+  await f.call('/workers/add',{label:'sol',row:'Latest',level:0});
+  await f.call('/wake',{label:'sol'});
+  const ticket=f.app.wakes.next().ticket!;f.app.wakes.claim(ticket.nonce);
+  const chat='https://chatgpt.com/c/job-'+outcome;
+  f.app.wakes.chat({nonce:ticket.nonce,url:chat});
+  const pending=f.app.gateway.submit({model:'chatgpt:sol',messages:[{role:'user',content:'Complete this'}]});
+  const job=[...f.app.gateway.jobs.values()][0];
+  const claim=await f.app.gateway.exchange('client',{worker_label:'sol',wake_nonce:ticket.nonce,maximum_wait_seconds:1});
+  f.app.wakes.result({nonce:ticket.nonce,ok:true,url:chat});
+  if(outcome==='success') {
+    assert.equal(claim.state,'request');
+    const reply=await f.app.gateway.exchange('client',{worker_label:'sol',wake_nonce:ticket.nonce,request_id:job.id,claim_token:job.claim,response:'answer',maximum_wait_seconds:1});
+    assert.equal(reply.state,'released');await pending;
+  }else if(outcome==='cancel') {f.app.gateway.cancel({id:job.id});await assert.rejects(pending);}
+  else await assert.rejects(pending);
+  assert.ok(f.app.config.wake_state!.archives.includes(chat),'finished job queues its chat immediately');
+  const lease=f.app.wakes.archiveNext().archive!;assert.equal(lease.url,chat);assert.equal((lease as any).verify,undefined);
+  const patches:any[]=[];
+  t.mock.method(globalThis,'fetch',async(_:any,init:any={})=>{
+    if(init.method==='PATCH'){patches.push(JSON.parse(init.body));return {ok:true} as any;}
+    return {ok:true,json:async()=>({accessToken:'fake'})} as any;
+  });
+  const ok=await archiveConversation(lease.url);f.app.wakes.archiveResult({nonce:lease.nonce,ok});
+  assert.deepEqual(patches,[{is_visible:false}]);
+
+});
+
+test('no-trace: a fresh authorized ordinary wake can replace a deleted job worker',async t=>{
+  const f=await fixture(t,{gateway:{timeoutMs:1000,pollMs:1}});
+  await f.call('/workers/add',{label:'sol',row:'Latest',level:0});
+  for(let i=0;i<2;i++) {
+    if(i) f.app.wakes.config.wake_state!.wakes=[];
+    f.app.wakes.enqueue('sol'); const ticket=f.app.wakes.next().ticket!;f.app.wakes.claim(ticket.nonce);
+    const pending=f.app.gateway.submit({model:'chatgpt:sol',messages:[{role:'user',content:'run '+i}]});
+    const work=await f.app.gateway.exchange('client',{worker_label:'sol',wake_nonce:ticket.nonce,maximum_wait_seconds:1});
+    assert.equal(work.state,'request');
+    f.app.wakes.result({nonce:ticket.nonce,ok:true,url:'https://chatgpt.com/c/replacement-'+i});
+    const job=[...f.app.gateway.jobs.values()].find(j=>!j.finished)!;
+    const reply=await f.app.gateway.exchange('client',{worker_label:'sol',wake_nonce:ticket.nonce,request_id:job.id,claim_token:job.claim,response:'ok',maximum_wait_seconds:1});
+    assert.equal(reply.state,'released'); await pending;
+  }
 });

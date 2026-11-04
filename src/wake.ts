@@ -1,5 +1,5 @@
-import type { WakeConfig, ComposerJob, PickerReceipt, WakeState, WakeTicket } from './types.ts';
-import { quotaState, workerIdentities, workerRoute, retainedUrls, ordinaryWakeMode } from './config.ts';
+import type { WakeConfig, ComposerJob, PickerReceipt, WakeState, WakeTicket, SweepCounters } from './types.ts';
+import { quotaState, workerIdentities, workerRoute, retainedUrls, ordinaryWakeMode, validateSweepCounters } from './config.ts';
 import { check, chatUrl, nonce, object, shortTitle } from './security.ts';
 
 // Calendar days use the service host's local timezone; the hour remains rolling across midnight.
@@ -75,17 +75,19 @@ export class Wakes {
   declare needed: (name: string, identity: string) => boolean;
   declare waiting: (name: string, identity: string) => boolean;
   declare issued: (ticket: WakeTicket) => void; declare registeredContact?: (ticket: WakeTicket) => boolean;
-  declare alive: (identity: string) => boolean; declare lastReconcile: number; declare lastSweep: {at: number; deleted: number} | null;
-  declare tickets: Map<string, WakeTicket>; declare archiveLease: {nonce: string; url: string; expires_at: number; remove?: boolean} | null;
+  declare alive: (identity: string) => boolean; declare lastReconcile: number; declare lastSweep: SweepCounters | null;
+  declare tickets: Map<string, WakeTicket>; declare archiveLease: {nonce: string; url: string; expires_at: number; remove: true; verify?: true} | null;
   sweepLeases = new Map<string, number>();
 
   constructor(config: WakeConfig, now = Date.now, { alive = () => true, save = () => {}, contact = () => 0, active = () => false, failed = () => {}, jobContact = () => false, jobFinished = () => true, needed = () => true, waiting = () => false, mediaPending = () => false, issued = () => {}, registeredContact }: WakeOptions = {}) {
-    this.issued = issued; this.registeredContact = registeredContact; this.alive = alive; this.lastReconcile = 0; this.lastSweep = null;
+    this.issued = issued; this.registeredContact = registeredContact; this.alive = alive; this.lastReconcile = 0; this.lastSweep = config.wake_state?.last_sweep ?? null;
     this.config = config; this.now = now; this.save = save; this.contact = contact; this.active = active; this.failed = failed; this.jobContact = jobContact; this.jobFinished = jobFinished;
     this.mediaPending = mediaPending; this.needed = needed; this.waiting = waiting; this.tickets = new Map(); this.archiveLease = null;
     config.wake_state ??= { wakes: [], failed: {}, cooldown_until: 0, archives: [] };
+    config.wake_state.disposal_queued_at ??= Object.fromEntries(config.wake_state.archives.map(url => [url, now()]));
   }
   persist(state: WakeState, labels = this.config.labels, quota_until = this.config.quota_until, quota_pause_until = this.config.quota_pause_until) {
+    state.disposal_queued_at = Object.fromEntries(state.archives.map(url => [url, state.disposal_queued_at?.[url] ?? this.now()]));
     this.save({ ...this.config, labels, wake_state: state, quota_until, quota_pause_until });
     this.config.labels = labels; this.config.wake_state! = state; this.config.quota_until = quota_until; this.config.quota_pause_until = quota_pause_until;
   }
@@ -130,7 +132,7 @@ export class Wakes {
     check((this.config.quota_pause_until ?? 0) <= this.now() && (!Object.hasOwn(this.config.quota_until ?? {}, name) || this.config.quota_until![name] <= this.now()), 'Worker label is paused by a ChatGPT quota limit', 429, 'quota_blocked');
     check(![...this.tickets.values()].some(t => pending(t) && (job ? t.job_id === job.id : t.label === identity && t.type !== 'composer')), 'Wake already pending', 409);
     check(this.tickets.size < 128, 'Wake queue is full', 429);
-    check(this.config.wake_state!.archives.length < 256, 'Archive queue is full; allow archive retries first', 429);
+    check(this.config.wake_state!.archives.length < 256, 'Deletion queue is full; allow deletion retries first', 429);
     const ticket: WakeTicket = { nonce: nonce(), label: identity, ...(identity !== name ? {routing_label: name} : {}), ...(automatic ? {automatic: true} : {}), row: this.config.labels[name].row, level: this.config.labels[name].level,
       // Preserve saved picker behavior; new native labels carry an explicit mode.
       wake_mode: job ? (this.config.labels[name].wake_mode ?? 'configured') : ordinaryWakeMode(this.config.labels[name], this.config.wake_state!.worker_modes?.[name]),
@@ -231,7 +233,7 @@ export class Wakes {
     const state = cleared, labels = { ...this.config.labels };
     this.track(state, url);
     if (ticket.type === 'composer') {
-      check(state.archives.length < 256, 'Archive queue is full', 429);
+      check(state.archives.length < 256, 'Deletion queue is full', 429);
       state.archives.push(url); this.persist(state);
       ticket.url = url; ticket.state = 'confirmed'; ticket.error = null; ticket.retain_until = this.now() + 600000;
       return {ok: true};
@@ -344,7 +346,7 @@ export class Wakes {
       if (t.chat_url && (pending(t) || t.type === 'composer' && !this.jobFinished(t.job_id))) held.add(t.chat_url);
       if (t.url && t.type === 'composer' && !this.jobFinished(t.job_id)) held.add(t.url);
     }
-    const dispose = input.candidates.filter(c => now - c.created_at >= minAge && !held.has(`https://chatgpt.com/c/${c.id}`)).slice(0, 10).map(c => c.id);
+    const dispose = input.candidates.filter(c => now - c.created_at >= minAge && !held.has(`https://chatgpt.com/c/${c.id}`)).slice(0, 100).map(c => c.id);
     // The extension's whole sweep has a 20-second deadline. Fence receiver
     // changes for at most a minute, including failed/empty deletion results.
     this.sweeping();
@@ -352,21 +354,52 @@ export class Wakes {
     return {dispose, min_age_ms: minAge};
   }
   sweepDone(value: unknown, receiver?: string) {
-    const input = value as {deleted: string[]};
-    check(object(input) && Object.keys(input).length === 1 && Array.isArray(input.deleted) && input.deleted.length <= 100 && input.deleted.every(id => typeof id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(id)), 'Invalid sweep result');
-    if (receiver) this.sweepLeases.delete(receiver);
-    if (!input.deleted.length) return {ok: true};
-    this.lastSweep = {at: this.now(), deleted: (this.lastSweep?.deleted ?? 0) + input.deleted.length};
-    // Gone from ChatGPT: stop tracking any of them.
-    const gone = new Set(input.deleted.map(id => `https://chatgpt.com/c/${id}`));
-    const state = structuredClone(this.config.wake_state!);
-    if (state.started_chats?.some(url => gone.has(url)) || state.archives.some(url => gone.has(url))) {
+    // Already-loaded extensions may still send the previous deletion acknowledgment.
+    // Keep its cleanup semantics, but retain only numeric metadata in status/state.
+    if (object(value) && Object.keys(value).length === 1 && Array.isArray(value.deleted)) {
+      check(value.deleted.length <= 100 && value.deleted.every(id => typeof id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(id)), 'Invalid sweep result');
+      const state = structuredClone(this.config.wake_state!);
+      const gone = new Set(value.deleted.map(id => `https://chatgpt.com/c/${id}`));
       state.started_chats = (state.started_chats ?? []).filter(url => !gone.has(url));
       state.archives = state.archives.filter(url => !gone.has(url));
       for (const url of gone) if (state.chat_started_at) delete state.chat_started_at[url];
-      this.persist(state);
+      state.last_sweep = {at: this.now(), deleted: Number(this.lastSweep?.deleted ?? 0) + value.deleted.length};
+      this.persist(state); this.lastSweep = state.last_sweep;
+      if (receiver) this.sweepLeases.delete(receiver);
+      return {ok: true};
     }
+    const input = value as SweepCounters;
+    validateSweepCounters(input);
+    const state = structuredClone(this.config.wake_state!);
+    state.last_sweep = {...input}; this.persist(state);
+    this.lastSweep = state.last_sweep;
+    if (receiver) this.sweepLeases.delete(receiver);
     return {ok: true};
+  }
+  /** End one chat's assignment at the job boundary, even while its worker still polls. */
+  finishJob(identity: string, jobId?: string) {
+    const route = workerRoute(this.config, identity);
+    const state = structuredClone(this.config.wake_state!);
+    const labels = structuredClone(this.config.labels);
+    const sessions = structuredClone(this.config.session_workers ?? {});
+    const urls = new Set<string>();
+    if (!jobId && route.scope) {
+      const worker = sessions[identity]; if (worker?.url) {urls.add(worker.url); delete worker.url;}
+    } else if (!jobId) {
+      const saved = labels[route.name];
+      if (route.index === 1 && saved?.url) {urls.add(saved.url); delete saved.url;}
+      else if (saved?.replica_urls?.[String(route.index)]) {urls.add(saved.replica_urls[String(route.index)]); delete saved.replica_urls[String(route.index)]; if (!Object.keys(saved.replica_urls).length) delete saved.replica_urls;}
+    }
+    const tickets = [...this.tickets.values()].filter(t => t.label === identity && (jobId ? t.job_id === jobId : t.type !== 'composer') &&
+      (pending(t) || !!t.chat_url && state.started_chats?.includes(t.chat_url) || !!t.url && state.started_chats?.includes(t.url)));
+    for (const t of tickets) {if (t.chat_url) urls.add(t.chat_url); if (t.url) urls.add(t.url);}
+    if (!urls.size && !tickets.length) return false;
+    for (const url of urls) if (!state.archives.includes(url) && state.archives.length < 256) state.archives.push(url);
+    const previous = this.config.session_workers;
+    this.config.session_workers = sessions;
+    try { this.persist(state, labels); } catch (error) {this.config.session_workers = previous; throw error;}
+    for (const t of tickets) if (pending(t)) {t.state = t.state === 'queued' ? 'cancelled' : 'expired'; t.expires_at = this.now(); t.retain_until = this.now() + 600000;}
+    return urls.size > 0 || tickets.some(t => t.issued_at !== undefined);
   }
   /** Queue a finished session's own chats for disposal and forget its workers. */
   releaseSession(scope: string) {
@@ -374,7 +407,7 @@ export class Wakes {
     if (workers.length === 0) return { released: 0 };
     const state = structuredClone(this.config.wake_state!);
     const urls = workers.flatMap(([, worker]) => worker.url ? [worker.url] : []);
-    check(state.archives.length + urls.length <= 256, 'Archive queue is full; allow archive retries first', 429);
+    check(state.archives.length + urls.length <= 256, 'Deletion queue is full; allow deletion retries first', 429);
     for (const url of urls) if (!state.archives.includes(url)) state.archives.push(url);
     const previous = this.config.session_workers;
     this.config.session_workers = Object.fromEntries(Object.entries(previous ?? {}).filter(([, worker]) => worker.scope !== scope));
@@ -385,19 +418,22 @@ export class Wakes {
     if (this.archiveLease && this.archiveLease.expires_at > this.now()) return { archive: null };
     const url = this.config.wake_state!.archives.find(url => ![...this.tickets.values()].some(t => t.type === 'composer' && t.url === url && !this.jobFinished(t.job_id)));
     if (!url) return { archive: null };
-    check(!retainedUrls(this.config).includes(url), 'Cannot archive a retained worker chat', 409);
-    // Legacy and manually supplied queue entries lack proof of lane ownership,
-    // so even delete mode archives them instead of hiding them from the account.
-    this.archiveLease = { nonce: nonce(), url, expires_at: this.now() + 120000,
-      ...(this.config.chat_disposal === 'delete' && this.config.wake_state!.started_chats?.includes(url) ? { remove: true } : {}) };
+    check(!retainedUrls(this.config).includes(url), 'Cannot delete a retained worker chat', 409);
+    // Only extension-recorded URLs carry direct ownership proof. Others need a first-message check.
+    this.archiveLease = { nonce: nonce(), url, expires_at: this.now() + 120000, remove: true,
+      ...(this.config.wake_state!.started_chats?.includes(url) ? {} : {verify: true as const}) };
     return { archive: this.archiveLease };
   }
   archiveResult(value: unknown) {
     const input = value as WakeInput;
     const lease = this.archiveLease;
     check(lease && lease.nonce === input.nonce && lease.expires_at > this.now() && typeof input.ok === 'boolean', 'Invalid archive result', 409);
-    if (input.ok) {
-      const state = structuredClone(this.config.wake_state!); state.archives = state.archives.filter(url => url !== lease.url);
+    const unproven = (input as WakeInput & {unproven?: boolean}).unproven;
+    check(unproven === undefined || unproven === true && lease.verify === true && !input.ok, 'Invalid unproven result');
+    if (input.ok || unproven) {
+      const state = structuredClone(this.config.wake_state!);
+      if (unproven) state.unproven_dropped = (state.unproven_dropped ?? 0) + 1;
+      state.archives = state.archives.filter(url => url !== lease.url);
       state.started_chats = (state.started_chats ?? []).filter(url => url !== lease.url);
       if (state.chat_started_at) delete state.chat_started_at[lease.url];
       this.persist(state); this.archiveLease = null;
@@ -406,6 +442,13 @@ export class Wakes {
       this.persist(state); lease.expires_at = this.now() + 30000;
     }
     return { ok: true };
+  }
+  disposalStatus() {
+    const state = this.config.wake_state!, now = this.now();
+    const age = (urls: string[], times = state.chat_started_at) => Math.max(0, ...urls.map(url => now - (times?.[url] ?? now)));
+    return {mode: 'delete' as const, queued: state.archives.length, oldest_queued_age_ms: age(state.archives, state.disposal_queued_at),
+      tracked: (state.started_chats ?? []).length, oldest_tracked_age_ms: age(state.started_chats ?? []),
+      unproven_dropped: state.unproven_dropped ?? 0, last_sweep: this.lastSweep};
   }
   status() { this.prune(); return [...this.tickets.values()].map(t => ({ label: t.label, state: t.state, error: t.error ?? null, ...(t.permissions ? {permissions: t.permissions} : {}), ...(t.failure_code ? {failure_code: t.failure_code} : {}), ...(t.failure_stage ? {failure_stage: t.failure_stage} : {}), ...(t.failure_diagnostic ? {failure_diagnostic:t.failure_diagnostic} : {}) })); }
 }

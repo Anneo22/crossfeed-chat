@@ -42,8 +42,8 @@ export function loadConfig(directory: string, overrides: Partial<Config> = {}): 
   config.wake_daily_cap ??= 0;
   config.wake_hourly_cap ??= 12;
   config.attachment_delivery ??= 'mcp';
-  config.chat_disposal ??= 'archive';
-  check(['archive', 'delete'].includes(config.chat_disposal), 'Chat disposal must be archive or delete');
+  // Discard legacy configuration: conversation disposal is always deletion.
+  delete (config as Config & {chat_disposal?: unknown}).chat_disposal;
   check(['mcp', 'composer'].includes(config.attachment_delivery), 'Attachment delivery must be mcp or composer');
   check(Number.isSafeInteger(config.wake_daily_cap) && config.wake_daily_cap >= 0 && config.wake_daily_cap <= 1000, 'Invalid wake daily cap');
   check(Number.isSafeInteger(config.wake_hourly_cap) && config.wake_hourly_cap >= 0 && config.wake_hourly_cap <= 1000, 'Invalid wake hourly cap');
@@ -60,11 +60,17 @@ export function loadConfig(directory: string, overrides: Partial<Config> = {}): 
       check(Array.isArray(s.started_chats) && s.started_chats.length <= 4096 && new Set(s.started_chats).size === s.started_chats.length, 'Invalid started chat ownership state');
       s.started_chats.forEach(chatUrl);
     }
+    if (s.unproven_dropped !== undefined) check(timestamp(s.unproven_dropped), 'Invalid unproven disposal count');
+    if (s.last_sweep !== undefined) validateSweepCounters(s.last_sweep, true);
+    if (s.disposal_queued_at !== undefined) {
+      check(object(s.disposal_queued_at) && Object.keys(s.disposal_queued_at).length <= 256 && Object.values(s.disposal_queued_at).every(timestamp), 'Invalid disposal queue times');
+      Object.keys(s.disposal_queued_at).forEach(chatUrl);
+    }
     if (s.chat_started_at !== undefined) {
       check(object(s.chat_started_at) && Object.keys(s.chat_started_at).length <= 4096 && Object.values(s.chat_started_at).every(timestamp), 'Invalid chat start times');
       Object.keys(s.chat_started_at).forEach(chatUrl);
     }
-    check(!s.archives.some(url => retainedUrls(config).includes(url)), 'Archive queue contains a retained chat');
+    check(!s.archives.some(url => retainedUrls(config).includes(url)), 'Deletion queue contains a retained chat');
   }
   return config;
 }
@@ -113,4 +119,10 @@ export function workerRoute(config: Pick<Config, 'labels'>, identity: string) {
 export function retainedUrls(config: Pick<Config, 'labels' | 'session_workers'>) {
   return [...Object.values(config.labels).flatMap(s => [...(s.url ? [s.url] : []), ...Object.values(s.replica_urls ?? {})]),
     ...Object.values(config.session_workers ?? {}).flatMap(s => s.url ? [s.url] : [])];
+}
+
+const sweepCounterKeys = ['at', 'listed_visible', 'listed_archived', 'candidates', 'approved', 'wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived', 'errors', 'pass_complete', 'backlog', 'pass_started_at', 'pass_wake_matches_visible', 'pass_wake_matches_archived', 'pass_deleted_visible', 'pass_deleted_archived', 'last_pass_started_at', 'last_pass_completed_at', 'last_pass_wake_matches_visible', 'last_pass_wake_matches_archived', 'last_pass_deleted_visible', 'last_pass_deleted_archived', 'pass_errors', 'last_pass_errors'];
+export function validateSweepCounters(value: unknown, legacy = false) {
+  check(object(value) && Object.keys(value).length > 0 && Object.keys(value).every(key => sweepCounterKeys.includes(key) || legacy && key === 'deleted') &&
+    Object.entries(value).every(([key, v]) => key === 'pass_complete' ? typeof v === 'boolean' : Number.isSafeInteger(v) && Number(v) >= 0), 'Invalid sweep result');
 }

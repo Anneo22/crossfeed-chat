@@ -126,7 +126,7 @@ test('delete mode hides only chats confirmed as started by this lane', () => {
   f.config.wake_state!.archives.push('https://chatgpt.com/c/not-started-here');
   const foreign = f.wakes.archiveNext().archive!;
   assert.equal(foreign.url, 'https://chatgpt.com/c/not-started-here');
-  assert.equal(foreign.remove, undefined);
+  assert.equal(foreign.remove, true); assert.equal(foreign.verify, true);
 });
 
 test('wake tickets carry a sanitized optional caller title', () => {
