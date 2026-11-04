@@ -22,6 +22,34 @@ test('failure status retains only bounded diagnostic observations, never raw pag
   assert.deepEqual(status.failure_diagnostic,{checkpoint:'prefill_model',status:'complete',current:'root',model_action:'observe',model_models:1,model_menus:1,model_position:1,model_maximum:4,model_rowMatches:true,model_statusMatches:false});
   assert(!JSON.stringify(status).includes('private'));
 });
+test('prefill diagnostic allowlist retains fixed bounded input-state primitives only', () => {
+  const f=fixture(),t=f.begin()!;
+  f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic:{checkpoint:'prefill_model',model:{action:'point',clicks:8,enabled:false,hitOwned:false,pointMoved:true,unknown:'private'}}});
+  assert.deepEqual(f.wakes.status()[0].failure_diagnostic,{checkpoint:'prefill_model',model_action:'point',model_clicks:8,model_enabled:false,model_hitOwned:false,model_pointMoved:true});
+  assert(!JSON.stringify(f.writes).includes('private'));
+});
+test('prefill diagnostic rejects oversized payloads and non-primitive or out-of-bound values', () => {
+  const read=(diagnostic:unknown)=>{const f=fixture(),t=f.begin()!;f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic});return f.wakes.status()[0].failure_diagnostic;};
+  for(const model of [
+    {action:'private',clicks:9,enabled:{private:true},hitOwned:['private'],pointMoved:'true'},
+    {clicks:-1,enabled:0,hitOwned:null,pointMoved:[]},
+    {clicks:1.5,enabled:'false',hitOwned:{},pointMoved:1},
+    {clicks:Infinity}, {clicks:NaN}, {clicks:true},
+  ]) assert.deepEqual(read({checkpoint:'prefill_model',model}),{checkpoint:'prefill_model'});
+  assert.equal(read({checkpoint:'prefill_model',model:{clicks:1},unknown:'private'.repeat(1000)}),undefined);
+  assert.equal(read({checkpoint:'private'.repeat(100),model:{action:'point'.repeat(100)}}),undefined);
+  const maximal=read({checkpoint:'registration_probe',status:'complete',current:{uri_class:'root_other_query'},pending:{uri_class:'native_prompt'},model:{action:'observe',models:8,menus:8,selected:8,sliders:8,minimum:8,maximum:8,position:8,clicks:8,rowMatches:true,statusMatches:true,enabled:true,hitOwned:true,pointMoved:true,unknown:'private'}})!;
+  assert.equal(Object.keys(maximal).length,18); assert(new TextEncoder().encode(JSON.stringify(maximal)).length<=1024);
+  assert(!JSON.stringify(maximal).includes('private'));
+});
+
+test('prefill diagnostic records the server-validated initial picker level, never a supplied spoof', () => {
+  const f=fixture(),t=f.begin()!;
+  f.wakes.observe({nonce:t.nonce,picker_receipt:{row:t.row,level:t.level}});
+  f.wakes.result({nonce:t.nonce,ok:false,error:'level_unconfirmed',stage:'prefillModel',diagnostic:{checkpoint:'prefill_model',model:{action:'observe',position:1,initialLevel:8}}});
+  assert.deepEqual(f.wakes.status()[0].failure_diagnostic,{checkpoint:'prefill_model',model_action:'observe',model_position:1,model_initialLevel:3});
+});
+
 test('one issued wake at a time; queued tickets get a fresh four-minute window', () => {
   const f = fixture(); const first = f.begin(); f.wakes.enqueue('other');
   assert.equal(f.wakes.next().ticket, null);

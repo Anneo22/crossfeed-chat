@@ -39,8 +39,14 @@ const failureCodes = new Set(['invalid_ticket', 'page_not_ready', 'page_changed'
 const failureStages = new Set(['loading', 'create', 'attach', 'activate', 'load', 'upload', 'enter', 'observe', 'result', 'claim', 'input', 'ready', 'registration', 'modelFocus', 'picker', 'prefillModel', 'sliderFocus', 'editorFocus', 'mention', 'resolved', 'send', 'uploadInput', 'uploads']);
 // Keep only bounded observations in authenticated status; never retain URLs,
 // prompt text, nonces or free-form browser diagnostics from the extension.
-function failureDiagnostic(value: unknown) {
+function failureDiagnostic(value: unknown, initialLevel?: number) {
   if (!object(value)) return undefined;
+  // Bound even discarded input, then retain only this fixed primitive schema.
+  // A malformed diagnostic must never affect wake failure handling.
+  try {
+    const encoded = JSON.stringify(value);
+    if (typeof encoded !== 'string' || new TextEncoder().encode(encoded).byteLength > 4096) return undefined;
+  } catch { return undefined; }
   const out: Record<string,string|number|boolean> = {};
   if (typeof value.checkpoint === 'string' && ['tab_wait','probe_result','probe_binding','before_send','prefill_model','registration_wait','registration_probe'].includes(value.checkpoint)) out.checkpoint=value.checkpoint;
   if (typeof value.status === 'string' && ['complete','loading','missing','other'].includes(value.status)) out.status=value.status;
@@ -53,9 +59,14 @@ function failureDiagnostic(value: unknown) {
     for(const key of ['models','menus','selected','sliders','minimum','maximum','position']) {
       const v=value.model[key];if(typeof v==='number'&&Number.isInteger(v)&&v>=-1&&v<=8) out['model_'+key]=v;
     }
-    for(const key of ['rowMatches','statusMatches']) if(typeof value.model[key]==='boolean') out['model_'+key]=value.model[key];
+    const clicks=value.model.clicks;
+    if(typeof clicks==='number'&&Number.isInteger(clicks)&&clicks>=0&&clicks<=8) out.model_clicks=clicks;
+    for(const key of ['rowMatches','statusMatches','enabled','hitOwned','pointMoved']) if(typeof value.model[key]==='boolean') out['model_'+key]=value.model[key];
+    // Only the receipt already validated against this ticket can establish the
+    // pre-native level. Never accept a browser-supplied initialLevel field.
+    if(typeof initialLevel==='number'&&Number.isInteger(initialLevel)&&initialLevel>=0&&initialLevel<=8) out.model_initialLevel=initialLevel;
   }
-  return Object.keys(out).length ? out : undefined;
+  return Object.keys(out).length && new TextEncoder().encode(JSON.stringify(out)).byteLength <= 1024 ? out : undefined;
 }
 export class Wakes {
   declare config: WakeConfig; declare now: () => number; declare save: (config: WakeConfig) => void; declare contact: (name: string) => number; declare active: (name: string) => boolean;
@@ -206,7 +217,7 @@ export class Wakes {
       } else this.failure(ticket, 'failed', input.error === 'rate_limited');
       ticket.failure_code = failureCodes.has(input.error ?? '') ? input.error : 'browser_error';
       if (failureStages.has(input.stage ?? '')) ticket.failure_stage = input.stage;
-      ticket.failure_diagnostic = failureDiagnostic(input.diagnostic);
+      ticket.failure_diagnostic = failureDiagnostic(input.diagnostic, ticket.failure_stage === 'prefillModel' ? ticket.picker_receipt?.level : undefined);
       return { ok: true };
     }
     check(ticket.state === 'claimed' && this.registered(ticket), 'Wake must be claimed and polling before confirmation', 409);
