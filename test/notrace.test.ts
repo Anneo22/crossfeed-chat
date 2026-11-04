@@ -76,6 +76,7 @@ function sweepFake(t: any, count = 145) {
   });
   const fetcher: any = async(address: string,init: any) => {
     const body=JSON.parse(init.body);
+    if(address.endsWith('/inventory')) return {ok:true,text:async()=>'{"ok":true}'};
     if(address.endsWith('/sweep/done')) {reports.push(body);return {ok:true,text:async()=>'{"ok":true}'};}
     return {ok:true,text:async()=>JSON.stringify({dispose:body.candidates.map((c:any)=>c.id)})};
   };

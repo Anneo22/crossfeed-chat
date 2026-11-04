@@ -255,13 +255,19 @@ export function firstUserText(conversation: any): string {
 
 function createdAt(value: unknown): number | null {
   const ms = typeof value === 'string' ? Date.parse(value) : typeof value === 'number' ? value * 1000 : NaN;
-  return Number.isFinite(ms) ? ms : null;
+  return Number.isFinite(ms) ? Math.trunc(ms) : null;
 }
 
 const sweepEveryMs = 600000, sweepMinAgeMs = 600000, sweepChecked = 5000, sweepPerRun = 30;
 const sweepFloor = Date.parse('2026-09-15T00:00:00Z');
-const passKeys = ['wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived'] as const;
-type SweepCandidate = {id: string; created_at: number; matched?: boolean};
+const inventoryKeys = ['listed_visible', 'listed_archived', 'crossfeed_visible', 'crossfeed_archived', 'owner_visible', 'owner_archived',
+  'unclassified_visible', 'unclassified_archived', 'owner_min_create_time', 'owner_max_create_time'];
+const passKeys = ['wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived', ...inventoryKeys];
+type InventoryClass = 'crossfeed' | 'owner' | 'unclassified';
+type SweepCandidate = {id: string; created_at: number; matched?: boolean; classification?: InventoryClass};
+type OwnerSample = {id: string; title: string; create_time: number; archived: boolean};
+// Never write titles to extension storage. Reloads intentionally lose these samples.
+const inventoryMemory = new WeakMap<object, {titles: Map<string, string>; samples: OwnerSample[]}>();
 type SweepCursor = {archived: boolean; offset: number; pending: SweepCandidate[]; next_offset: number; end: boolean};
 /** Resume a bounded pass through both listings. Only approved, proven wake messages are deleted. */
 export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fetcher: Fetcher = fetch, now: () => number = Date.now): Promise<void> {
@@ -271,16 +277,46 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
   if (previous.pass_complete === true && previous.backlog === 0 && previous.errors === 0 &&
     (previous.pass_errors ?? previous.errors) === 0 && previous.pass_wake_matches_visible === 0 && previous.pass_wake_matches_archived === 0 && now() - previous.at < sweepEveryMs) return;
   const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string').slice(-sweepChecked) : []);
-  let cursor: SweepCursor = previous.cursor && !previous.pass_complete ? structuredClone(previous.cursor) : {archived: false, offset: 0, pending: [], next_offset: 0, end: false};
-  const continuing = !!previous.cursor && !previous.pass_complete;
+  const continuing = !!previous.cursor && !previous.pass_complete && previous.inventory_version === 1;
+  let cursor: SweepCursor = continuing ? structuredClone(previous.cursor) : {archived: false, offset: 0, pending: [], next_offset: 0, end: false};
+  if (!continuing || !inventoryMemory.has(store)) inventoryMemory.set(store, {titles: new Map(), samples: []});
+  const memory = inventoryMemory.get(store)!;
+  const sample = (id: string, created: number, archived: boolean) => {
+    const title = memory.titles.get(id);
+    if (!title || memory.samples.some(s => s.id === id)) return;
+    memory.samples.push({id, title, create_time: created, archived});
+    memory.samples.sort((a, b) => b.create_time - a.create_time);
+    memory.samples.length = Math.min(5, memory.samples.length);
+  };
   const report: Record<string, number | boolean> = {at: now(), listed_visible: 0, listed_archived: 0, candidates: 0, approved: 0,
     wake_matches_visible: 0, wake_matches_archived: 0, deleted_visible: 0, deleted_archived: 0, errors: 0, pass_complete: false, backlog: 1,
-    pass_started_at: continuing ? previous.pass_started_at : now()};
-  for (const key of passKeys) {report['pass_' + key] = continuing ? previous['pass_' + key] ?? 0 : 0; report['last_pass_' + key] = previous['last_pass_' + key] ?? 0;}
+    pass_started_at: continuing ? previous.pass_started_at : now(), inventory_version: 1, inventory_errors: 0};
+  for (const key of passKeys) {report[key] ??= 0; report['pass_' + key] = continuing ? previous['pass_' + key] ?? 0 : 0; report['last_pass_' + key] = previous['last_pass_' + key] ?? 0;}
   report.pass_errors = continuing ? previous.pass_errors ?? 0 : 0;
   report.last_pass_errors = previous.last_pass_errors ?? 0;
   report.last_pass_started_at = previous.last_pass_started_at ?? 0;
   report.last_pass_completed_at = previous.last_pass_completed_at ?? 0;
+  const increment = (key: string, amount = 1) => {report[key] = Number(report[key]) + amount; report['pass_' + key] = Number(report['pass_' + key]) + amount;};
+  const classify = (candidate: SweepCandidate, classification: InventoryClass, archived: boolean, counted = false) => {
+    const side = archived ? 'archived' : 'visible';
+    if (!counted || candidate.classification !== classification) {
+      if (counted) {
+        // Its initial unclassified count may have been recorded in a previous run.
+        report['pass_' + candidate.classification + '_' + side] = Math.max(0, Number(report['pass_' + candidate.classification + '_' + side]) - 1);
+        report[candidate.classification + '_' + side] = Math.max(0, Number(report[candidate.classification + '_' + side]) - 1);
+      }
+      increment(classification + '_' + side);
+      candidate.classification = classification;
+      if (classification === 'owner') {
+        for (const prefix of ['', 'pass_']) {
+          const min = prefix + 'owner_min_create_time', max = prefix + 'owner_max_create_time';
+          report[min] = Number(report[min]) ? Math.min(Number(report[min]), candidate.created_at) : candidate.created_at;
+          report[max] = Math.max(Number(report[max]), candidate.created_at);
+        }
+      }
+    }
+    if (classification === 'owner') sample(candidate.id, candidate.created_at, archived);
+  };
   const save = async () => store.set({crossfeedSweep: {...report, cursor, checked: [...checked].slice(-sweepChecked)}});
   await save();
   const started = now(), signal = AbortSignal.timeout(20000);
@@ -305,15 +341,24 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
         const items = (await listing.json())?.items;
         if (!Array.isArray(items)) throw Error('list_shape');
         pages++;
-        report['listed_' + side] = Number(report['listed_' + side]) + items.length;
-        // Offset counts remaining rows: successful deletions below reduce it, avoiding skipped rows.
+        const metadata: SweepCandidate[] = items.flatMap((item: any) => {
+          const created = createdAt(item?.create_time);
+          return typeof item?.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item.id) && created !== null && Number.isSafeInteger(created) && created >= 0 ? [{id: item.id, created_at: created}] : [];
+        });
+        // Ownership is known even for pre-floor, retained, queued or too-young rows.
+        const ownership = metadata.length ? await request(config, '/extension/inventory/check', {candidates: metadata}, fetcher) as {crossfeed?: string[]} : {};
+        const known = new Set(Array.isArray(ownership.crossfeed) ? ownership.crossfeed : []);
+        increment('listed_' + side, items.length);
+        // Deletions below reduce the next offset to avoid skipping rows in the shrinking listing.
         cursor.next_offset = cursor.offset + items.length;
         cursor.end = items.length < 100;
-        for (const item of items) {
-          const created = createdAt(item?.create_time);
-          if (created !== null && created < sweepFloor) {cursor.end = true; break;}
-          if (typeof item?.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(item.id) && created !== null &&
-            created >= sweepFloor && now() - created >= sweepMinAgeMs && !checked.has(item.id)) cursor.pending.push({id: item.id, created_at: created});
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i], candidate = metadata.find(c => c.id === item?.id);
+          if (!candidate) continue;
+          if (typeof item.title === 'string') memory.titles.set(candidate.id, Array.from(item.title).slice(0, 80).join(''));
+          classify(candidate, known.has(candidate.id) ? 'crossfeed' : candidate.created_at < sweepFloor || checked.has(candidate.id) ? 'owner' : 'unclassified', cursor.archived);
+          if (candidate.classification === 'unclassified' && candidate.created_at >= sweepFloor && now() - candidate.created_at >= sweepMinAgeMs) cursor.pending.push(candidate);
+          else memory.titles.delete(candidate.id);
         }
         await save();
         if (!cursor.pending.length) continue;
@@ -335,8 +380,9 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
             if (response.status !== 404) {
               const first = firstUserText(await response.json());
               if (!first) throw Error('unreadable_message');
-              if (!isWakeSignature(first)) checked.add(id);
+              if (!isWakeSignature(first)) {checked.add(id); classify(candidate, 'owner', cursor.archived, true);}
               else {
+                classify(candidate, 'crossfeed', cursor.archived, true);
                 const match = 'wake_matches_' + side, deleted = 'deleted_' + side;
                 if (!candidate.matched) {
                   candidate.matched = true;
@@ -353,6 +399,7 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
             if (signal.aborted || now() - started >= 20000) break;
           }
         }
+        memory.titles.delete(id);
         cursor.pending.shift();
         await save();
       }
@@ -368,6 +415,8 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
     for (const key of passKeys) report['last_pass_' + key] = report['pass_' + key];
   }
   report.backlog = report.pass_complete ? 0 : Math.max(1, cursor.pending.length);
+  try { await request(config, '/extension/inventory', {owner_samples: memory.samples.map(({id, ...s}) => s)}, fetcher); }
+  catch { report.inventory_errors = Number(report.inventory_errors) + 1; }
   try { await request(config, '/extension/sweep/done', report, fetcher); } catch {report.errors = Number(report.errors) + 1; report.pass_errors = Number(report.pass_errors) + 1;}
   await save();
 }
@@ -479,7 +528,7 @@ const reasons = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mo
 
 export async function request(config: APIConfig, path: string, body: unknown, fetcher: Fetcher = fetch): Promise<APIReply> {
   if (!apiURL(config.apiURL) || typeof config.key !== 'string' || !config.key || /[\r\n]/.test(config.key) ||
-    !['/extension/next', '/extension/claim', '/extension/observe', '/extension/result', '/extension/check', '/extension/archive/next', '/extension/archive/result', '/extension/chat', '/extension/sweep', '/extension/sweep/done'].includes(path)) throw Error('invalid_config');
+    !['/extension/next', '/extension/claim', '/extension/observe', '/extension/result', '/extension/check', '/extension/archive/next', '/extension/archive/result', '/extension/chat', '/extension/sweep', '/extension/sweep/done', '/extension/inventory', '/extension/inventory/check'].includes(path)) throw Error('invalid_config');
   // Host-permitted extension GETs can omit Origin, which the paired API requires.
   // Use an empty POST for queue reads so Chrome supplies the extension Origin.
   const input = body ?? {};

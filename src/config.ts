@@ -122,6 +122,9 @@ export function retainedUrls(config: Pick<Config, 'labels' | 'session_workers'>)
 }
 
 const sweepCounterKeys = ['at', 'listed_visible', 'listed_archived', 'candidates', 'approved', 'wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived', 'errors', 'pass_complete', 'backlog', 'pass_started_at', 'pass_wake_matches_visible', 'pass_wake_matches_archived', 'pass_deleted_visible', 'pass_deleted_archived', 'last_pass_started_at', 'last_pass_completed_at', 'last_pass_wake_matches_visible', 'last_pass_wake_matches_archived', 'last_pass_deleted_visible', 'last_pass_deleted_archived', 'pass_errors', 'last_pass_errors'];
+const inventoryCounterKeys = ['listed_visible','listed_archived','crossfeed_visible','crossfeed_archived','owner_visible','owner_archived',
+  'unclassified_visible','unclassified_archived','owner_min_create_time','owner_max_create_time'];
+sweepCounterKeys.push('inventory_version', 'inventory_errors', ...inventoryCounterKeys.flatMap(k => [k, 'pass_'+k, 'last_pass_'+k]));
 export function validateSweepCounters(value: unknown, legacy = false) {
   check(object(value) && Object.keys(value).length > 0 && Object.keys(value).every(key => sweepCounterKeys.includes(key) || legacy && key === 'deleted') &&
     Object.entries(value).every(([key, v]) => key === 'pass_complete' ? typeof v === 'boolean' : Number.isSafeInteger(v) && Number(v) >= 0), 'Invalid sweep result');

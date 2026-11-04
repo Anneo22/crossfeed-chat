@@ -1,6 +1,7 @@
 import type { WakeConfig, ComposerJob, PickerReceipt, WakeState, WakeTicket, SweepCounters } from './types.ts';
 import { quotaState, workerIdentities, workerRoute, retainedUrls, ordinaryWakeMode, validateSweepCounters } from './config.ts';
 import { check, chatUrl, nonce, object, shortTitle } from './security.ts';
+import { legacyChatURL } from './legacy-chats.ts';
 
 // Calendar days use the service host's local timezone; the hour remains rolling across midnight.
 export function wakeLimits(config: WakeConfig, now = Date.now()) {
@@ -32,7 +33,7 @@ export function wakeDeferred(config: WakeConfig, name: string, now = Date.now())
     || Object.hasOwn(state?.failed ?? {}, name) && state!.failed[name] + wakeRetryDelay(config, name) > now;
 }
 interface WakeOptions {
-  alive?: (identity: string) => boolean; issued?: (ticket: WakeTicket) => void; registeredContact?: (ticket: WakeTicket) => boolean; save?: (config: WakeConfig) => void; contact?: (name: string) => number; active?: (name: string) => boolean; failed?: (name: string, jobId?: string, identity?: string) => void; jobContact?: (id: string | undefined) => boolean; jobFinished?: (id: string | undefined) => boolean; needed?: (name: string, identity: string) => boolean; waiting?: (name: string, identity: string) => boolean; mediaPending?: (ticket: WakeTicket) => boolean }
+  retired?: (identity: string) => void; alive?: (identity: string) => boolean; issued?: (ticket: WakeTicket) => void; registeredContact?: (ticket: WakeTicket) => boolean; save?: (config: WakeConfig) => void; contact?: (name: string) => number; active?: (name: string) => boolean; failed?: (name: string, jobId?: string, identity?: string) => void; jobContact?: (id: string | undefined) => boolean; jobFinished?: (id: string | undefined) => boolean; needed?: (name: string, identity: string) => boolean; waiting?: (name: string, identity: string) => boolean; mediaPending?: (ticket: WakeTicket) => boolean }
 interface WakeInput { nonce: string; picker_receipt?: PickerReceipt; ok?: boolean; url?: string; error?: string; stage?: string; diagnostic?: unknown; permissions?: {connector: string; option: string}[] }
 // Store only fixed diagnostic identifiers, never page text or browser errors.
 const failureCodes = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mode_unconfirmed', 'level_unconfirmed', 'level_unavailable', 'permission_unconfirmed', 'upload_unconfirmed', 'upload_failed', 'composer_not_empty', 'mention_unconfirmed', 'send_unconfirmed', 'claim_refused', 'expired', 'browser_error', 'rate_limited']);
@@ -75,12 +76,14 @@ export class Wakes {
   declare needed: (name: string, identity: string) => boolean;
   declare waiting: (name: string, identity: string) => boolean;
   declare issued: (ticket: WakeTicket) => void; declare registeredContact?: (ticket: WakeTicket) => boolean;
-  declare alive: (identity: string) => boolean; declare lastReconcile: number; declare lastSweep: SweepCounters | null;
+  declare retired: (identity: string) => void; declare alive: (identity: string) => boolean; declare lastReconcile: number; declare lastSweep: SweepCounters | null;
   declare tickets: Map<string, WakeTicket>; declare archiveLease: {nonce: string; url: string; expires_at: number; remove: true; verify?: true} | null;
   sweepLeases = new Map<string, number>();
+  // Owner titles have no disk representation, including in last_sweep.
+  ownerSamples: {title: string; create_time: number; archived: boolean}[] = [];
 
-  constructor(config: WakeConfig, now = Date.now, { alive = () => true, save = () => {}, contact = () => 0, active = () => false, failed = () => {}, jobContact = () => false, jobFinished = () => true, needed = () => true, waiting = () => false, mediaPending = () => false, issued = () => {}, registeredContact }: WakeOptions = {}) {
-    this.issued = issued; this.registeredContact = registeredContact; this.alive = alive; this.lastReconcile = 0; this.lastSweep = config.wake_state?.last_sweep ?? null;
+  constructor(config: WakeConfig, now = Date.now, { retired = () => {}, alive = () => true, save = () => {}, contact = () => 0, active = () => false, failed = () => {}, jobContact = () => false, jobFinished = () => true, needed = () => true, waiting = () => false, mediaPending = () => false, issued = () => {}, registeredContact }: WakeOptions = {}) {
+    this.retired = retired; this.issued = issued; this.registeredContact = registeredContact; this.alive = alive; this.lastReconcile = 0; this.lastSweep = config.wake_state?.last_sweep ?? null;
     this.config = config; this.now = now; this.save = save; this.contact = contact; this.active = active; this.failed = failed; this.jobContact = jobContact; this.jobFinished = jobFinished;
     this.mediaPending = mediaPending; this.needed = needed; this.waiting = waiting; this.tickets = new Map(); this.archiveLease = null;
     config.wake_state ??= { wakes: [], failed: {}, cooldown_until: 0, archives: [] };
@@ -294,15 +297,15 @@ export class Wakes {
     const finished = (identity: string, url: string) => !this.alive(identity) && !pendingIdentity(identity) && now - seen(url) >= GRACE;
     const labels = {...this.config.labels};
     const sessions = {...(this.config.session_workers ?? {})};
-    const retire: string[] = [];
+    const retire: string[] = [], retiring: string[] = [];
     for (const [name, saved] of Object.entries(this.config.labels)) {
       const identities = workerIdentities(this.config, name);
       let next = saved;
-      if (saved.url && finished(identities[0], saved.url) && state.archives.length + retire.length < 256) { retire.push(saved.url); const {url, ...rest} = next; next = rest; }
+      if (saved.url && finished(identities[0], saved.url) && state.archives.length + retire.length < 256) { retire.push(saved.url); retiring.push(identities[0]); const {url, ...rest} = next; next = rest; }
       for (const [index, url] of Object.entries(saved.replica_urls ?? {})) {
         const identity = identities[Number(index) - 1] ?? `${name}~replica-${index}`;
         if (finished(identity, url) && state.archives.length + retire.length < 256) {
-          retire.push(url);
+          retire.push(url); retiring.push(identity);
           const {[index]: _gone, ...left} = next.replica_urls!;
           const {replica_urls, ...rest} = next;
           next = Object.keys(left).length ? {...rest, replica_urls: left} : rest;
@@ -312,7 +315,7 @@ export class Wakes {
     }
     for (const [identity, worker] of Object.entries(this.config.session_workers ?? {})) {
       if (worker.url && finished(identity, worker.url) && state.archives.length + retire.length < 256) {
-        retire.push(worker.url); const {url, ...rest} = worker; sessions[identity] = rest;
+        retire.push(worker.url); retiring.push(identity); const {url, ...rest} = worker; sessions[identity] = rest;
       }
     }
     for (const url of retire) if (!state.archives.includes(url)) state.archives.push(url);
@@ -327,6 +330,7 @@ export class Wakes {
     const previous = this.config.session_workers;
     this.config.session_workers = sessions;
     try { this.persist(state, labels); } catch (error) { this.config.session_workers = previous; throw error; }
+    for (const identity of retiring) this.retired(identity);
     return {retired: retire.length, orphans};
   }
   sweeping() {
@@ -353,6 +357,37 @@ export class Wakes {
     if (receiver && dispose.length) this.sweepLeases.set(receiver, now + 60000);
     return {dispose, min_age_ms: minAge};
   }
+  inventoryCheck(value: unknown) {
+    const input = value as {candidates: {id: string; created_at: number}[]};
+    check(object(input) && Object.keys(input).length === 1 && Array.isArray(input.candidates) && input.candidates.length <= 100 &&
+      input.candidates.every(c => object(c) && Object.keys(c).length === 2 && typeof c.id === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(c.id) && Number.isSafeInteger(c.created_at)), 'Invalid inventory candidates');
+    const known = new Set([...retainedUrls(this.config), ...this.config.wake_state!.archives, ...(this.config.wake_state!.started_chats ?? [])]);
+    for (const t of this.tickets.values()) {if (t.chat_url) known.add(t.chat_url); if (t.url) known.add(t.url);}
+    return {crossfeed: input.candidates.filter(c => known.has(`https://chatgpt.com/c/${c.id}`)).map(c => c.id)};
+  }
+  inventory() { return {counters: this.lastSweep, owner_samples: structuredClone(this.ownerSamples)}; }
+  inventorySamples(value: unknown) {
+    check(object(value) && Object.keys(value).length === 1 && Array.isArray(value.owner_samples) && value.owner_samples.length <= 5 &&
+      value.owner_samples.every(s => object(s) && Object.keys(s).length === 3 && typeof s.title === 'string' && Array.from(s.title).length <= 80 &&
+        Number.isSafeInteger(s.create_time) && s.create_time >= 0 && typeof s.archived === 'boolean'), 'Invalid inventory samples');
+    this.ownerSamples = value.owner_samples.map(s => ({title: s.title, create_time: s.create_time, archived: s.archived}));
+    return {ok: true};
+  }
+  /** Both legacy state files are ownership evidence. Import atomically before any deletion lease. */
+  importLegacy(value: unknown) {
+    check(object(value) && Object.keys(value).every(k => ['urls','invalid'].includes(k)) && Array.isArray(value.urls) && value.urls.length <= 8192 &&
+      value.urls.every(legacyChatURL) && (value.invalid === undefined || typeof value.invalid === 'number' && Number.isSafeInteger(value.invalid) && value.invalid >= 0 && value.invalid <= 8192), 'Invalid legacy import');
+    const counts = {imported: 0, skipped_retained: 0, skipped_queued: 0, invalid: Number(value.invalid ?? 0)};
+    const retained = new Set(retainedUrls(this.config)), state = structuredClone(this.config.wake_state!);
+    for (const url of value.urls) {
+      if (retained.has(url)) {counts.skipped_retained++; continue;}
+      if (state.archives.includes(url)) {counts.skipped_queued++; continue;}
+      check(state.archives.length < 256, 'Deletion queue is full; allow deletion retries first', 429);
+      this.track(state, url); state.archives.push(url); counts.imported++;
+    }
+    if (counts.imported) this.persist(state);
+    return counts;
+  }
   sweepDone(value: unknown, receiver?: string) {
     // Already-loaded extensions may still send the previous deletion acknowledgment.
     // Keep its cleanup semantics, but retain only numeric metadata in status/state.
@@ -376,23 +411,25 @@ export class Wakes {
     if (receiver) this.sweepLeases.delete(receiver);
     return {ok: true};
   }
-  /** End one chat's assignment at the job boundary, even while its worker still polls. */
-  finishJob(identity: string, jobId?: string) {
+  /** Unscoped jobs end a chat; scoped jobs retain it until their session ends. */
+  finishJob(identity: string, jobId?: string, cancelledWake = false) {
     const route = workerRoute(this.config, identity);
+    if (route.scope && !jobId && !cancelledWake) return false;
     const state = structuredClone(this.config.wake_state!);
     const labels = structuredClone(this.config.labels);
     const sessions = structuredClone(this.config.session_workers ?? {});
     const urls = new Set<string>();
-    if (!jobId && route.scope) {
-      const worker = sessions[identity]; if (worker?.url) {urls.add(worker.url); delete worker.url;}
-    } else if (!jobId) {
+    if (!jobId && !route.scope) {
       const saved = labels[route.name];
       if (route.index === 1 && saved?.url) {urls.add(saved.url); delete saved.url;}
       else if (saved?.replica_urls?.[String(route.index)]) {urls.add(saved.replica_urls[String(route.index)]); delete saved.replica_urls[String(route.index)]; if (!Object.keys(saved.replica_urls).length) delete saved.replica_urls;}
     }
     const tickets = [...this.tickets.values()].filter(t => t.label === identity && (jobId ? t.job_id === jobId : t.type !== 'composer') &&
-      (pending(t) || !!t.chat_url && state.started_chats?.includes(t.chat_url) || !!t.url && state.started_chats?.includes(t.url)));
+      (pending(t) || (jobId || !route.scope) && (!!t.chat_url && state.started_chats?.includes(t.chat_url) || !!t.url && state.started_chats?.includes(t.url))));
     for (const t of tickets) {if (t.chat_url) urls.add(t.chat_url); if (t.url) urls.add(t.url);}
+    // Cancelling an in-flight scoped wake disposes only that attempt's chat, never an older session chat.
+    const worker = sessions[identity];
+    if (!jobId && route.scope && worker?.url && urls.has(worker.url)) delete worker.url;
     if (!urls.size && !tickets.length) return false;
     for (const url of urls) if (!state.archives.includes(url) && state.archives.length < 256) state.archives.push(url);
     const previous = this.config.session_workers;
@@ -406,12 +443,15 @@ export class Wakes {
     const workers = Object.entries(this.config.session_workers ?? {}).filter(([, worker]) => worker.scope === scope);
     if (workers.length === 0) return { released: 0 };
     const state = structuredClone(this.config.wake_state!);
-    const urls = workers.flatMap(([, worker]) => worker.url ? [worker.url] : []);
+    const tickets = [...this.tickets.values()].filter(t => workerRoute(this.config,t.label).scope === scope && pending(t));
+    const urls = [...new Set([...workers.flatMap(([, worker]) => worker.url ? [worker.url] : []), ...tickets.flatMap(t => t.chat_url ? [t.chat_url] : [])])];
     check(state.archives.length + urls.length <= 256, 'Deletion queue is full; allow deletion retries first', 429);
     for (const url of urls) if (!state.archives.includes(url)) state.archives.push(url);
     const previous = this.config.session_workers;
     this.config.session_workers = Object.fromEntries(Object.entries(previous ?? {}).filter(([, worker]) => worker.scope !== scope));
     try { this.persist(state); } catch (error) { this.config.session_workers = previous; throw error; }
+    for (const ticket of tickets) {ticket.state = ticket.state === 'queued' ? 'cancelled' : 'expired'; ticket.expires_at = this.now(); ticket.retain_until = this.now() + 600000;}
+    for (const [identity] of workers) this.retired(identity);
     return { released: workers.length, queued: urls.length };
   }
   archiveNext() {

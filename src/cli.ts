@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createApp } from './server.ts';
 import type { App, AppOptions } from './server.ts';
-import { defaultDirectory } from './config.ts';
-import { check, Fault } from './security.ts';
+import { defaultDirectory, loadConfig, saveConfig } from './config.ts';
+import { check, Fault, lease } from './security.ts';
+import { parseLegacyChats } from './legacy-chats.ts';
+import { Wakes } from './wake.ts';
 
 const help = `Crossfeed Chat
   serve --public-url https://your-tunnel.example --connector Crossfeed
@@ -20,6 +23,7 @@ const help = `Crossfeed Chat
   approve <id>             Approve that exact pending OAuth request
   doctor                   Print problems and a next step for each
   status                   Show known/awake labels and wake requests
+  import-legacy-chats --from PATH [--state-dir PATH]  Queue chats owned by legacy state
   cancel <job-id>           Remove a queued or running job; its caller gets caller_cancelled
   worker add <label> --row ROW --level 0..4 [--replicas N] [--wake-mode configured|native]
   worker set <label> [--replicas N] [--wake-mode configured|native]
@@ -71,7 +75,7 @@ export async function main(argv: string[] = process.argv.slice(2), env: Record<s
   const { values: flags, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true, options: {
     'public-url': { type: 'string' }, connector: { type: 'string' }, 'api-port': { type: 'string' }, 'mcp-port': { type: 'string' },
     'workbench': { type: 'string', multiple: true }, 'workbench-commands': { type: 'string' }, 'workbench-shell': { type: 'string' }, 'workbench-network': { type: 'boolean' }, 'workbench-guards': { type: 'string' },
-    bridge: { type: 'string' },
+    bridge: { type: 'string' }, from: { type: 'string' },
     'no-audio-transcription': {type: 'boolean'}, 'speech-locale': {type: 'string'},
     'state-dir': { type: 'string' }, row: { type: 'string' }, 'job-deadline-ms': { type: 'string' }, 'max-claimed-jobs': { type: 'string' }, 'worker-lease-ms': { type: 'string' }, 'wake-daily-cap': { type: 'string' }, 'wake-hourly-cap': { type: 'string' }, 'attachment-delivery': { type: 'string' }, 'chat-disposal': { type: 'string' }, level: { type: 'string' }, replicas: {type: 'string'}, 'wake-mode': {type: 'string'}, pending: { type: 'boolean' }, help: { type: 'boolean' }
   } });
@@ -81,7 +85,7 @@ export async function main(argv: string[] = process.argv.slice(2), env: Record<s
   check(Number.isInteger(port) && port > 0 && port <= 65535, 'Invalid API port');
   check(typeof env.CROSSFEED_API_KEY === 'string' && /^[A-Za-z0-9._~-]{32,256}$/.test(env.CROSSFEED_API_KEY), 'Supply CROSSFEED_API_KEY, at least 32 URL-safe characters');
   check(positionals.length <= (['worker', 'client', 'extension'].includes(command) ? 3 : ['approve', 'wake', 'cancel'].includes(command) ? 2 : 1), 'Unexpected arguments');
-  const allowed = ({ serve: ['public-url', 'connector', 'api-port', 'mcp-port', 'state-dir', 'job-deadline-ms', 'worker-lease-ms', 'max-claimed-jobs', 'wake-daily-cap', 'wake-hourly-cap', 'attachment-delivery', 'chat-disposal', 'no-audio-transcription', 'speech-locale', 'workbench', 'workbench-commands', 'workbench-shell', 'workbench-network', 'workbench-guards', 'bridge'], link: ['api-port'], approve: ['api-port', 'pending'], status: ['api-port'], doctor: ['api-port'], cancel: ['api-port'], wake: ['api-port'], client: ['api-port'], extension: ['api-port'], worker: ['api-port', 'row', 'level', 'replicas', 'wake-mode'] } as Record<string, string[]>)[command];
+  const allowed = ({ serve: ['public-url', 'connector', 'api-port', 'mcp-port', 'state-dir', 'job-deadline-ms', 'worker-lease-ms', 'max-claimed-jobs', 'wake-daily-cap', 'wake-hourly-cap', 'attachment-delivery', 'chat-disposal', 'no-audio-transcription', 'speech-locale', 'workbench', 'workbench-commands', 'workbench-shell', 'workbench-network', 'workbench-guards', 'bridge'], 'import-legacy-chats': ['api-port', 'state-dir', 'from'], link: ['api-port'], approve: ['api-port', 'pending'], status: ['api-port'], doctor: ['api-port'], cancel: ['api-port'], wake: ['api-port'], client: ['api-port'], extension: ['api-port'], worker: ['api-port', 'row', 'level', 'replicas', 'wake-mode'] } as Record<string, string[]>)[command];
   check(allowed && Object.keys(flags).every(k => allowed.includes(k)), 'Unknown command or inappropriate flag');
   if (command === 'serve') {
     const config: Partial<ReturnType<typeof import('./config.ts').loadConfig>> = {};
@@ -126,7 +130,26 @@ export async function main(argv: string[] = process.argv.slice(2), env: Record<s
     check(response.ok, data.error?.message ?? 'Control request failed', response.status);
     return data;
   };
-  if (command === 'link') {
+  if (command === 'import-legacy-chats') {
+    check(flags.from, 'Use import-legacy-chats --from PATH [--state-dir PATH]');
+    check(fs.statSync(flags.from).isFile() && fs.statSync(flags.from).size <= 1024 * 1024, 'Invalid legacy state file');
+    let parsed: unknown;
+    try { parsed = JSON.parse(fs.readFileSync(flags.from, 'utf8')); }
+    catch { throw new Fault(400, 'invalid_request', 'Invalid legacy state JSON'); }
+    const legacy = parseLegacyChats(parsed), directory = path.resolve(flags['state-dir'] ?? defaultDirectory(env));
+    let counts;
+    try { counts = await call('/chats/import-legacy', {...legacy, directory}); }
+    catch (error) {
+      // An HTTP refusal is authoritative. Only a missing listener permits the offline locked writer.
+      if (error instanceof Fault) throw error;
+      const unlock = lease(directory);
+      try {
+        const config = loadConfig(directory);
+        counts = new Wakes(config, Date.now, {save: next => saveConfig(directory, next)}).importLegacy(legacy);
+      } finally { unlock(); }
+    }
+    io.log(JSON.stringify(counts));
+  } else if (command === 'link') {
     const result = await call('/link', {});
     io.log(`Connection window open for five minutes.\n1. Tunnel ONLY the MCP listener (default 127.0.0.1:4320).\n2. In ChatGPT add a custom connector with OAuth: ${result.public_url}/mcp\n3. When the approval page appears, run crossfeed-chat approve --pending, then approve <id>.\n4. Choose Always allow for this connector if ChatGPT prompts.\n5. Save a worker with worker add <label> --row ROW --level 0..4, using the exact row text shown in your ChatGPT model picker.\n6. Install the wake extension, then run wake <label>, or open a fresh Chat mode chat and send @<connector> wake up. Call gateway_exchange with worker_label=<label>..`);
   } else if (command === 'approve') {

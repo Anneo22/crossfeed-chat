@@ -1223,8 +1223,8 @@ test('joining scoped HTTP work inherits the issued wake timestamp in its receipt
   assert(results.every(result => result.status === 503 && result.data.error.code === 'extension_unavailable'));
 });
 
-test('MCP eight delayed local-tool continuations use fresh chats and delete each finished conversation', {timeout:10000}, async t => {
-  const f = await fixture(t, {gateway:{timeoutMs:5000, pollMs:1}}), tokens = await f.connect('tool_continuations');
+test('MCP atomic completion wait carries eight delayed local-tool continuations over production HTTP', {timeout:10000}, async t => {
+  const f = await fixture(t, {gateway:{timeoutMs:5000, pollMs:1000}}), tokens = await f.connect('tool_continuations');
   await f.call('/workers/add', {label:'sol', row:'Latest', level:2});
   const toolSpec = {type:'function', function:{name:'lookup', parameters:{type:'object'}}};
   const toolCall = (id: string) => ({id, type:'function', function:{name:'lookup', arguments:'{"value":1}'}});
@@ -1233,39 +1233,41 @@ test('MCP eight delayed local-tool continuations use fresh chats and delete each
     {role:'assistant',content:null,tool_calls:[toolCall(`prior_${i}`)]},
     {role:'tool',content:`local result ${i}`,tool_call_id:`prior_${i}`},
   ];
+  const submit = (i: number) => f.call('/v1/chat/completions', {model:'chatgpt:sol', messages:messagesFor(i), tools:[toolSpec], tool_choice:'required'}, {headers:{'X-Crossfeed-Session':'pi-continuation-session'}});
+  let caller = submit(0);
+  while (!f.app.wakes.has('sol', undefined, null)) await new Promise(r => setTimeout(r, 1));
   const ext = (route: string, input?: any) => f.call(route, input ?? {}, {key:f.extensionSecret});
+  const ticket = (await ext('/extension/next')).data.ticket;
+  assert.equal((await ext('/extension/claim', {nonce:ticket.nonce})).status, 200);
+  const identity = f.app.wakes.tickets.get(ticket.nonce)!.label;
+  const exchange = (args: Record<string, any> = {}) => f.rpc(tokens.access_token, 'tools/call', {
+    name:'gateway_exchange', arguments:{worker_label:identity, wake_nonce:ticket.nonce, maximum_wait_seconds:1, ...args},
+    _meta:{'openai/session':'continuation-conversation'},
+  });
+  let workerWait = exchange();
   for (let i = 0; i < 8; i++) {
-    const caller = f.call('/v1/chat/completions', {model:'chatgpt:sol', messages:messagesFor(i), tools:[toolSpec], tool_choice:'required'}, {headers:{'X-Crossfeed-Session':'pi-continuation-session'}});
-    while (!f.app.wakes.has('sol', undefined, null)) await new Promise(r => setTimeout(r, 1));
-    const ticket = (await ext('/extension/next')).data.ticket;
-    assert.equal((await ext('/extension/claim', {nonce:ticket.nonce})).status, 200);
-    const identity = f.app.wakes.tickets.get(ticket.nonce)!.label;
-    const exchange = (args: Record<string, any> = {}) => f.rpc(tokens.access_token, 'tools/call', {
-      name:'gateway_exchange', arguments:{worker_label:identity, wake_nonce:ticket.nonce, maximum_wait_seconds:1, ...args},
-      _meta:{'openai/session':'continuation-conversation-'+i},
-    });
-    const reply = await exchange();
-    assert.equal(reply.status, 200); assert.equal(reply.data.result.isError, undefined);
+    const reply = await workerWait;
+    assert.equal(reply.status, 200);
+    assert.equal(reply.data.result.isError, undefined);
     const work = reply.data.result.structuredContent;
     assert.equal(work.state, 'request'); assert.equal(work.worker_label, identity);
     assert.deepEqual(work.request.messages, messagesFor(i));
-    assert.equal((await ext('/extension/check', {nonce:ticket.nonce})).data.registered, true);
-    const chat = 'https://chatgpt.com/c/tool-continuations-'+i;
-    assert.equal((await ext('/extension/result', {nonce:ticket.nonce,ok:true,url:chat})).status, 200);
-    const workerWait = exchange({request_id:work.request.request_id, claim_token:work.request.claim_token, tool_calls:[toolCall(`next_${i}`)]});
+    if (i === 0) {
+      assert.equal((await ext('/extension/check', {nonce:ticket.nonce})).data.registered, true);
+      assert.equal((await ext('/extension/result', {nonce:ticket.nonce,ok:true,url:'https://chatgpt.com/c/tool-continuations'})).status, 200);
+    }
+    workerWait = exchange({request_id:work.request.request_id, claim_token:work.request.claim_token, tool_calls:[toolCall(`next_${i}`)]});
     const completed = await caller;
-    assert.equal(completed.status, 200); assert.equal(completed.data.metadata.worker_identity, identity);
+    assert.equal(completed.status, 200);
+    assert.equal(completed.data.metadata.worker_identity, identity);
     assert.equal(completed.data.choices[0].finish_reason, 'tool_calls');
     assert.equal(completed.data.choices[0].message.tool_calls[0].id, `next_${i}`);
-    assert.equal((await workerWait).data.result.structuredContent.state, 'released');
-    const disposal = (await ext('/extension/archive/next')).data.archive;
-    assert.equal(disposal.url, chat); assert.equal(disposal.remove, true); assert.equal(disposal.verify, undefined);
-    assert.equal((await ext('/extension/archive/result', {nonce:disposal.nonce,ok:true})).status, 200);
+    while (!f.app.gateway.workers.get(identity)?.polling) await new Promise(r => setTimeout(r, 1));
     await new Promise(r => setTimeout(r, 5));
+    assert.equal(f.app.wakes.tickets.size, 1, 'warm tool continuations need no new wake');
+    if (i < 7) caller = submit(i + 1);
   }
-  assert.equal(f.app.wakes.tickets.size, 8, 'each completed job had its own fresh wake');
-  assert.deepEqual(f.app.config.wake_state!.archives, []);
-  assert.deepEqual(f.app.config.wake_state!.started_chats, []);
+  assert.equal((await workerWait).data.result.structuredContent.state, 'idle');
 });
 
 test('HTTP Pi without session correlation fails explicitly instead of borrowing a shared worker',async t=>{
@@ -1981,7 +1983,7 @@ test('session release queues only the caller own chats and refuses while its job
   const foreign = await f.call('/v1/sessions/release',{session:'orchestrator:someone-else'});
   assert.equal(foreign.status,200); assert.deepEqual(foreign.data,{released:0});
   const released = await f.call('/v1/sessions/release',{session});
-  assert.equal(released.status,200); assert.deepEqual(released.data,{released:1,queued:0}, 'cancellation already queued the chat before release');
+  assert.equal(released.status,200); assert.deepEqual(released.data,{released:1,queued:1}, 'the scoped chat stays retained until session release');
   assert.deepEqual(f.app.config.wake_state!.archives,['https://chatgpt.com/c/mine']);
   assert.deepEqual(Object.keys(f.app.config.session_workers),[`sol~session-${'b'.repeat(22)}`]);
 });

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse, Server, ServerOptions } from 'node:http';
 import manifest from '../package.json' with { type: 'json' };
@@ -79,6 +80,10 @@ async function startApp(options: AppOptions, release: () => void) {
   const gateway = new Gateway(config, {waitForWake:true, extensionLastActivity: extensionLastContact, saveBindings: conversation_bindings => saveConfig(directory,{...config,conversation_bindings}), audit: job => receipts.record(job), files, now: options.now, records: readPrivate(directory, 'jobs.json', {version: 1, jobs: []}, JOB_STORE_BYTES), save: state => writePrivate(directory, 'jobs.json', state), quota: name => { const quota = quotaState(config, name, (options.now ?? Date.now)()); saveConfig(directory, {...config, ...quota}); Object.assign(config, quota); }, ...options.gateway });
   const wakes = new Wakes(config, options.now, {
     alive: identity => gateway.workerAwake(gateway.workers.get(identity)),
+    retired: identity => {
+      const worker = gateway.workers.get(identity);
+      if (worker) {worker.revoked = true; worker.stale = true; worker.notify?.();}
+    },
     issued: ticket => {
       const oldWorker = gateway.workers.get(ticket.label);
       if (oldWorker && !oldWorker.active && !oldWorker.polling) oldWorker.stale = true;
@@ -113,11 +118,11 @@ async function startApp(options: AppOptions, release: () => void) {
   });
   gateway.onFinished = job => {
     const identity = job.delivery === 'composer' ? [...wakes.tickets.values()].find(t => t.job_id === job.id)?.label : job.worker;
-    if (identity) return wakes.finishJob(identity, job.delivery === 'composer' ? job.id : undefined);
+    if (identity) return wakes.finishJob(identity, job.delivery === 'composer' ? job.id : undefined, !!job.error);
     // Cancellation before assignment must also retire the abandoned waking attempt.
     if (![...gateway.jobs.values()].some(j => !j.finished && j.label === job.label && j.scope === job.scope)) {
       for (const t of wakes.tickets.values()) if (['queued','issued','claimed'].includes(t.state) &&
-        (t.routing_label ?? t.label) === job.label && workerRoute(config,t.label).scope === job.scope) wakes.finishJob(t.label, t.job_id);
+        (t.routing_label ?? t.label) === job.label && workerRoute(config,t.label).scope === job.scope) wakes.finishJob(t.label, t.job_id, true);
     }
     return false;
   };
@@ -385,6 +390,8 @@ async function startApp(options: AppOptions, release: () => void) {
           if (req.method === 'POST' && url.pathname === '/extension/chat') { const outcome = wakes.chat(input); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/sweep') { const outcome = wakes.sweepCheck(input, pairing.identify(bearer(req),origin)); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/sweep/done') { const outcome = wakes.sweepDone(input, pairing.identify(bearer(req),origin)); extensionContact(); return json(res, 200, outcome); }
+          if (req.method === 'POST' && url.pathname === '/extension/inventory/check') return json(res, 200, wakes.inventoryCheck(input));
+          if (req.method === 'POST' && url.pathname === '/extension/inventory') return json(res, 200, wakes.inventorySamples(input));
           if (req.method === 'POST' && url.pathname === '/extension/result') { const outcome = wakes.result(input); extensionContact(); return json(res, 200, outcome); }
         } else {
           if (req.method === 'GET' && url.pathname === '/extensions/receiver') return json(res, 200, receiverStatus());
@@ -424,6 +431,13 @@ async function startApp(options: AppOptions, release: () => void) {
             res.writeHead(200,{'Content-Type':row.mime,'Content-Length':data.length,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}); res.end(data); return;
           }
           if (req.method === 'GET' && ['/status', '/v1/gateway/status'].includes(url.pathname)) return json(res, 200, status());
+          if (req.method === 'GET' && url.pathname === '/chats/inventory') return json(res, 200, wakes.inventory());
+          if (req.method === 'POST' && url.pathname === '/chats/import-legacy') {
+            const input: Record<string, any> = await body(req);
+            const {directory: target, ...legacy} = input;
+            check(target === undefined || typeof target === 'string' && path.resolve(target) === path.resolve(directory), 'Import state directory does not match this server', 409);
+            return json(res, 200, wakes.importLegacy(legacy));
+          }
           if (req.method === 'POST' && ['/jobs/cancel', '/v1/jobs/cancel'].includes(url.pathname)) {
             const input: Record<string, any> = await body(req);
             check(Object.keys(input).length === 1 && typeof input.id === 'string' && /^[A-Za-z0-9_-]{32}$/.test(input.id) ||
@@ -440,7 +454,8 @@ async function startApp(options: AppOptions, release: () => void) {
             line(input.session,'caller correlation',256);
             const caller = receipts.pseudonym(`local:${input.session}`);
             check(![...gateway.jobs.values()].some(job => !job.finished && job.scope === caller), 'Session still has an active job', 409);
-            return json(res,200,wakes.releaseSession(caller));
+            const released = wakes.releaseSession(caller);
+            return json(res,200,released);
           }
           if (req.method === 'GET' && url.pathname === '/v1/models') return json(res, 200, { object: 'list', data: gateway.status().map(w => ({ id: w.model, object: 'model', created: 0, owned_by: 'crossfeed-chat', awake: w.awake, saved: w.saved, replicas: w.replicas, ...(w.saved ? { row: config.labels[w.label].row, level: config.labels[w.label].level, wake_mode: ordinaryWakeMode(config.labels[w.label], config.wake_state?.worker_modes?.[w.label]) } : {}) })) });
           if (req.method === 'POST' && url.pathname === '/link') return json(res, 200, oauth.open());
