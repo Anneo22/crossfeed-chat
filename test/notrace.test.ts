@@ -30,7 +30,7 @@ test('no-trace: unowned queue leases require proof and unproven outcomes drop du
   const config: any = {labels:{},wake_state:{wakes:[],failed:{},cooldown_until:0,archives:[url('personal')]}};
   let saved: any;
   const w = new Wakes(config,()=>1000,{save: s => {saved=structuredClone(s);}});
-  const lease = w.archiveNext().archive!;
+  const lease = w.archiveNext(true).archive!;
   assert.equal((lease as any).verify,true);
   w.archiveResult({nonce:lease.nonce,ok:false,unproven:true});
   assert.deepEqual(config.wake_state.archives,[]);

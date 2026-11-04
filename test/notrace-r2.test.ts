@@ -59,11 +59,11 @@ test('round2: legacy import validates exact URLs and IDs, skips retained and que
   const legacy={chats:Object.fromEntries([url('retained'),url('session'),url('queued'),url('new'),...bad].map((u,i)=>['label'+i,{url:u}])),_archive_pending:['pending','new','bad_id','/path',null]};
   fs.writeFileSync(source,JSON.stringify(legacy));const original=fs.readFileSync(source,'utf8');const logs:string[]=[];
   await main(['import-legacy-chats','--from',source,'--state-dir',directory],{CROSSFEED_API_KEY:key},{fetch:async()=>{throw Error('offline');},log:m=>logs.push(m)});
-  assert.deepEqual(JSON.parse(logs.join('')),{imported:2,skipped_retained:2,skipped_queued:2,invalid:12});
+  assert.deepEqual(JSON.parse(logs.join('')),{imported:2,skipped_retained:2,skipped_queued:2,skipped_imported:0,deferred:0,invalid:12});
   assert.equal(fs.readFileSync(source,'utf8'),original);
   const config=loadConfig(directory);assert.deepEqual(config.wake_state!.started_chats,[url('new'),url('pending')]);
   for(const u of [url('new'),url('pending')]) {assert.ok(config.wake_state!.archives.includes(u));assert.equal(typeof config.wake_state!.chat_started_at![u],'number');}
-  const w=new Wakes(config);const queued=w.archiveNext().archive!;w.archiveResult({nonce:queued.nonce,ok:false,unproven:true});
+  const w=new Wakes(config);const queued=w.archiveNext(true).archive!;w.archiveResult({nonce:queued.nonce,ok:false,unproven:true});
   assert.equal(w.archiveNext().archive!.verify,undefined,'imported ownership skips first-message verification');
 });
 
@@ -91,7 +91,7 @@ test('round2: running legacy import uses authenticated admin endpoint and its ow
   assert.equal((await f.call('/chats/import-legacy',{urls:[url('legacy')],invalid:0},'bad')).status,401);
   assert.equal((await f.call('/chats/import-legacy',{urls:[url('legacy')],invalid:0},key,true)).status,404);
   const logs:string[]=[];await main(['import-legacy-chats','--from',source,'--state-dir',f.directory,'--api-port',new URL(f.app.apiUrl).port],{CROSSFEED_API_KEY:key},{fetch:f.fake.fetcher,log:m=>logs.push(m)});
-  assert.deepEqual(JSON.parse(logs.join('')),{imported:1,skipped_retained:0,skipped_queued:0,invalid:0});
+  assert.deepEqual(JSON.parse(logs.join('')),{imported:1,skipped_retained:0,skipped_queued:0,skipped_imported:0,deferred:0,invalid:0});
   assert.deepEqual(f.app.config.wake_state!.archives,[url('legacy')]);assert.equal(f.app.wakes.archiveNext().archive!.verify,undefined);
   assert.equal((await f.call('/chats/import-legacy',{urls:[url('legacy')+'?bad'],invalid:0})).status,400);
 });
@@ -179,7 +179,7 @@ test('round2: legacy import rejects final line terminators instead of normalizin
   const directory=temporary(t),source=directory+'/legacy.json';
   fs.writeFileSync(source,JSON.stringify({chats:{lf:{url:url('lf')+'\n'},cr:{url:url('cr')+'\r'},crlf:{url:url('crlf')+'\r\n'}},_archive_pending:['pending\n','pending\r','pending\r\n']}));
   const logs:string[]=[];await main(['import-legacy-chats','--from',source,'--state-dir',directory],{CROSSFEED_API_KEY:key},{fetch:async()=>{throw Error('offline');},log:m=>logs.push(m)});
-  assert.deepEqual(JSON.parse(logs.join('')),{imported:0,skipped_retained:0,skipped_queued:0,invalid:6});
+  assert.deepEqual(JSON.parse(logs.join('')),{imported:0,skipped_retained:0,skipped_queued:0,skipped_imported:0,deferred:0,invalid:6});
   assert.equal(fs.existsSync(directory+'/config.json'),false,'invalid ownership never writes a config');
 });
 
@@ -192,11 +192,12 @@ for(const outcome of ['failed','cancelled'])test('round2: a '+outcome+' scoped w
   assert.equal(f.w.archiveNext().archive!.verify,undefined);
 });
 
-test('round2: legacy imports are idempotent and capacity refusal leaves the whole state unchanged',()=>{
+test('round2: legacy imports are idempotent and failed batch persistence leaves the whole state unchanged',()=>{
   const config:any={labels:{}};let writes=0;const w=new Wakes(config,()=>12345,{save:()=>{writes++;}});
   assert.equal(w.importLegacy({urls:[url('once')]}).imported,1);
   assert.equal(w.importLegacy({urls:[url('once')]}).skipped_queued,1);assert.equal(writes,1);
   config.wake_state.archives=Array.from({length:255},(_,i)=>url('queued-'+i));
-  const before=structuredClone(config);assert.throws(()=>w.importLegacy({urls:[url('fits'),url('overflow')]}),/queue is full/);
+  const before=structuredClone(config);w.save=()=>{throw Error('injected write failure');};
+  assert.throws(()=>w.importLegacy({urls:[url('fits'),url('overflow')]}),/injected write failure/);
   assert.deepEqual(config,before);assert.equal(writes,1);
 });

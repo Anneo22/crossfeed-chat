@@ -157,7 +157,7 @@ test('reconcile is throttled and never touches an alive worker, a legacy untrack
   f.wakes.reconcile(); f.advance(GRACE);
   assert.equal(f.wakes.reconcile().retired, 1);
   assert.equal(f.wakes.reconcile().retired, 0, 'throttled inside 30 s');
-  const lease = f.wakes.archiveNext().archive!;
+  const lease = f.wakes.archiveNext(true).archive!;
   assert.equal(lease.url, chat('legacy')); assert.equal(lease.remove, true); assert.equal(lease.verify, true, 'no ownership proof: verify first');
 });
 

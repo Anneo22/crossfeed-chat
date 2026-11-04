@@ -267,7 +267,7 @@ test('disposal always deletes and untracked leases require verification even wit
   for (const disposal of [undefined, 'archive', 'delete'] as const) {
     const config: WakeConfig = {connector: 'Crossfeed', labels: {sol: {row: 'Latest', level: 2}}, ...(disposal ? {chat_disposal: disposal} : {}),
       wake_state: {wakes: [], failed: {}, cooldown_until: 0, archives: ['https://chatgpt.com/c/old'], ...(disposal === 'delete' ? {started_chats: ['https://chatgpt.com/c/old']} : {})}};
-    const lease = new Wakes(config).archiveNext().archive!;
+    const lease = new Wakes(config).archiveNext(true).archive!;
     assert.equal(lease.url, 'https://chatgpt.com/c/old');
     assert.equal(lease.remove, true); assert.equal(lease.verify, disposal === 'delete' ? undefined : true);
   }

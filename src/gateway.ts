@@ -283,7 +283,11 @@ export class Gateway {
     const now = this.now();
     const expired = [...this.jobs.values()].filter(j => j.finished && j.expires <= now);
     // Commit the reduced store before forgetting payloads in memory; failed writes retry.
-    if (expired.length) this.save({version: 1, jobs: [...this.jobs.values()].filter(j => !expired.includes(j)).map(j => this.record(j))});
+    if (expired.length) {
+      this.save({version: 1, jobs: [...this.jobs.values()].filter(j => !expired.includes(j)).map(j => this.record(j))});
+      // Forget every expired payload before a finish below persists the remaining map.
+      for (const job of expired) this.jobs.delete(job.id);
+    }
     for (const [id, j] of this.jobs) {
       if (!this.waitForWake && !j.finished && j.state === 'queued' && this.blocked(j.label)) this.finish(j, new Fault(429, 'quota_blocked', 'Worker label is paused by a ChatGPT quota limit'));
       this.checkQueuedLiveness(j);

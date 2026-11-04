@@ -434,7 +434,7 @@ test('HTTP asleep-label completion wakes, claims, deletes finished chat and retr
   assert.equal(work.title, undefined);
   assert.equal((await extension('/extension/check', {nonce: ticket.nonce})).data.registered, true);
   assert.equal((await extension('/extension/result', {nonce: ticket.nonce, ok: true, url: 'https://chatgpt.com/c/new'})).status, 200);
-  const archive = (await extension('/extension/archive/next')).data.archive;
+  const archive = (await extension('/extension/archive/next', {verify:1})).data.archive;
   assert.equal(archive.url, 'https://chatgpt.com/c/old');
   await extension('/extension/archive/result', {nonce: archive.nonce, ok: false});
   assert.deepEqual(f.app.config.wake_state!.archives, [archive.url]);
@@ -991,7 +991,7 @@ test('extension queue transport claims wakes and retries archives with Chrome-sh
   await extensionRequest(config, '/extension/claim', {nonce: ticket!.nonce}, chromeFetch);
   assert.equal(f.app.wakes.status()[0].state, 'claimed');
   f.app.config.wake_state!.archives.push('https://chatgpt.com/c/orphan');
-  const {archive} = await extensionRequest(config, '/extension/archive/next', undefined, chromeFetch);
+  const {archive} = await extensionRequest(config, '/extension/archive/next', {verify:1}, chromeFetch);
   assert.equal(archive!.url, 'https://chatgpt.com/c/orphan');
   for (const route of ['/extension/next', '/extension/archive/next']) {
     assert.equal((await f.call(route, {}, {key: f.extensionSecret, headers: {Origin: 'https://chatgpt.com'}})).status, 403);

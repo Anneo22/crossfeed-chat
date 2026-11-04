@@ -385,7 +385,7 @@ async function startApp(options: AppOptions, release: () => void) {
           }
           if (req.method === 'POST' && url.pathname === '/extension/observe') { const outcome = wakes.observe(input); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/check') { const outcome = wakes.check(input.nonce); extensionContact(); return json(res, 200, outcome); }
-          if (['GET', 'POST'].includes(req.method) && url.pathname === '/extension/archive/next') { const outcome = wakes.archiveNext(); extensionContact(); return json(res, 200, outcome); }
+          if (['GET', 'POST'].includes(req.method) && url.pathname === '/extension/archive/next') { const outcome = wakes.archiveNext(input?.verify === 1); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/archive/result') { const outcome = wakes.archiveResult(input); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/chat') { const outcome = wakes.chat(input); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/sweep') { const outcome = wakes.sweepCheck(input, pairing.identify(bearer(req),origin)); extensionContact(); return json(res, 200, outcome); }

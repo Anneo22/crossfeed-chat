@@ -1,6 +1,6 @@
 import type { WakeConfig, ComposerJob, PickerReceipt, WakeState, WakeTicket, SweepCounters } from './types.ts';
 import { quotaState, workerIdentities, workerRoute, retainedUrls, ordinaryWakeMode, validateSweepCounters } from './config.ts';
-import { check, chatUrl, nonce, object, shortTitle } from './security.ts';
+import { check, chatUrl, hash, nonce, object, shortTitle } from './security.ts';
 import { legacyChatURL } from './legacy-chats.ts';
 
 // Calendar days use the service host's local timezone; the hour remains rolling across midnight.
@@ -373,19 +373,25 @@ export class Wakes {
     this.ownerSamples = value.owner_samples.map(s => ({title: s.title, create_time: s.create_time, archived: s.archived}));
     return {ok: true};
   }
-  /** Both legacy state files are ownership evidence. Import atomically before any deletion lease. */
+  /** Both legacy state files are ownership evidence. Persist each capacity-bounded batch before leasing. */
   importLegacy(value: unknown) {
     check(object(value) && Object.keys(value).every(k => ['urls','invalid'].includes(k)) && Array.isArray(value.urls) && value.urls.length <= 8192 &&
       value.urls.every(legacyChatURL) && (value.invalid === undefined || typeof value.invalid === 'number' && Number.isSafeInteger(value.invalid) && value.invalid >= 0 && value.invalid <= 8192), 'Invalid legacy import');
-    const counts = {imported: 0, skipped_retained: 0, skipped_queued: 0, invalid: Number(value.invalid ?? 0)};
+    const counts = {imported: 0, skipped_retained: 0, skipped_queued: 0, skipped_imported: 0, deferred: 0, invalid: Number(value.invalid ?? 0)};
     const retained = new Set(retainedUrls(this.config)), state = structuredClone(this.config.wake_state!);
-    for (const url of value.urls) {
+    // A digest and index let a repeated CLI import resume after successful deletions
+    // have erased their URLs from tracking. No deleted URL history is retained.
+    const digest = hash(JSON.stringify(value.urls));
+    const importedThrough = state.legacy_import?.digest === digest ? state.legacy_import.next : 0;
+    let next = value.urls.length;
+    for (const [index, url] of value.urls.entries()) {
       if (retained.has(url)) {counts.skipped_retained++; continue;}
       if (state.archives.includes(url)) {counts.skipped_queued++; continue;}
-      check(state.archives.length < 256, 'Deletion queue is full; allow deletion retries first', 429);
+      if (index < importedThrough) {counts.skipped_imported++; continue;}
+      if (state.archives.length >= 256) {next = Math.min(next, index); counts.deferred++; continue;}
       this.track(state, url); state.archives.push(url); counts.imported++;
     }
-    if (counts.imported) this.persist(state);
+    if (counts.imported) {state.legacy_import = {digest, next}; this.persist(state);}
     return counts;
   }
   sweepDone(value: unknown, receiver?: string) {
@@ -421,17 +427,26 @@ export class Wakes {
     const urls = new Set<string>();
     if (!jobId && !route.scope) {
       const saved = labels[route.name];
-      if (route.index === 1 && saved?.url) {urls.add(saved.url); delete saved.url;}
-      else if (saved?.replica_urls?.[String(route.index)]) {urls.add(saved.replica_urls[String(route.index)]); delete saved.replica_urls[String(route.index)]; if (!Object.keys(saved.replica_urls).length) delete saved.replica_urls;}
+      if (route.index === 1 && saved?.url) urls.add(saved.url);
+      else if (saved?.replica_urls?.[String(route.index)]) urls.add(saved.replica_urls[String(route.index)]);
     }
     const tickets = [...this.tickets.values()].filter(t => t.label === identity && (jobId ? t.job_id === jobId : t.type !== 'composer') &&
       (pending(t) || (jobId || !route.scope) && (!!t.chat_url && state.started_chats?.includes(t.chat_url) || !!t.url && state.started_chats?.includes(t.url))));
     for (const t of tickets) {if (t.chat_url) urls.add(t.chat_url); if (t.url) urls.add(t.url);}
     // Cancelling an in-flight scoped wake disposes only that attempt's chat, never an older session chat.
     const worker = sessions[identity];
-    if (!jobId && route.scope && worker?.url && urls.has(worker.url)) delete worker.url;
     if (!urls.size && !tickets.length) return false;
     for (const url of urls) if (!state.archives.includes(url) && state.archives.length < 256) state.archives.push(url);
+    // Retained URLs are the retry source when the bounded queue has no room.
+    if (!jobId && !route.scope) {
+      const saved = labels[route.name];
+      if (route.index === 1 && saved?.url && state.archives.includes(saved.url)) delete saved.url;
+      else if (saved?.replica_urls?.[String(route.index)] && state.archives.includes(saved.replica_urls[String(route.index)])) {
+        delete saved.replica_urls[String(route.index)];
+        if (!Object.keys(saved.replica_urls).length) delete saved.replica_urls;
+      }
+    }
+    if (!jobId && route.scope && worker?.url && urls.has(worker.url) && state.archives.includes(worker.url)) delete worker.url;
     const previous = this.config.session_workers;
     this.config.session_workers = sessions;
     try { this.persist(state, labels); } catch (error) {this.config.session_workers = previous; throw error;}
@@ -454,12 +469,14 @@ export class Wakes {
     for (const [identity] of workers) this.retired(identity);
     return { released: workers.length, queued: urls.length };
   }
-  archiveNext() {
+  archiveNext(verify = false) {
     if (this.archiveLease && this.archiveLease.expires_at > this.now()) return { archive: null };
-    const url = this.config.wake_state!.archives.find(url => ![...this.tickets.values()].some(t => t.type === 'composer' && t.url === url && !this.jobFinished(t.job_id)));
+    const url = this.config.wake_state!.archives.find(url =>
+      (verify || this.config.wake_state!.started_chats?.includes(url)) &&
+      ![...this.tickets.values()].some(t => t.type === 'composer' && t.url === url && !this.jobFinished(t.job_id)));
     if (!url) return { archive: null };
     check(!retainedUrls(this.config).includes(url), 'Cannot delete a retained worker chat', 409);
-    // Only extension-recorded URLs carry direct ownership proof. Others need a first-message check.
+    // Unproven URLs require an extension that explicitly supports first-message verification.
     this.archiveLease = { nonce: nonce(), url, expires_at: this.now() + 120000, remove: true,
       ...(this.config.wake_state!.started_chats?.includes(url) ? {} : {verify: true as const}) };
     return { archive: this.archiveLease };

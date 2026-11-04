@@ -2,7 +2,7 @@
 export interface WorkerSettings { row: string; level: number; wake_mode?: 'configured' | 'native'; url?: string; replicas?: number; replica_urls?: Record<string, string> }
 export interface PickerReceipt { row: string; level: number; source?: string; observed_at?: number }
 export interface SweepCounters { [key: string]: number | boolean }
-export interface WakeState { unproven_dropped?: number; disposal_queued_at?: Record<string, number>; last_sweep?: SweepCounters; worker_modes?: Record<string, 'configured' | 'native'>; wakes: number[]; failed: Record<string, number>; failed_attempts?: Record<string, number>; cooldown_until: number; archives: string[]; started_chats?: string[]; chat_started_at?: Record<string, number> }
+export interface WakeState { legacy_import?: {digest: string; next: number}; unproven_dropped?: number; disposal_queued_at?: Record<string, number>; last_sweep?: SweepCounters; worker_modes?: Record<string, 'configured' | 'native'>; wakes: number[]; failed: Record<string, number>; failed_attempts?: Record<string, number>; cooldown_until: number; archives: string[]; started_chats?: string[]; chat_started_at?: Record<string, number> }
 export interface SessionWorker { label: string; scope: string; url?: string }
 export interface Config {
   prefix: string; connector: string; labels: Record<string, WorkerSettings>; public_url?: string;

@@ -60,6 +60,9 @@ export function loadConfig(directory: string, overrides: Partial<Config> = {}): 
       check(Array.isArray(s.started_chats) && s.started_chats.length <= 4096 && new Set(s.started_chats).size === s.started_chats.length, 'Invalid started chat ownership state');
       s.started_chats.forEach(chatUrl);
     }
+    if (s.legacy_import !== undefined) check(object(s.legacy_import) && Object.keys(s.legacy_import).length === 2 &&
+      typeof s.legacy_import.digest === 'string' && /^[A-Za-z0-9_-]{43}$/.test(s.legacy_import.digest) &&
+      Number.isSafeInteger(s.legacy_import.next) && s.legacy_import.next >= 0 && s.legacy_import.next <= 8192, 'Invalid legacy import cursor');
     if (s.unproven_dropped !== undefined) check(timestamp(s.unproven_dropped), 'Invalid unproven disposal count');
     if (s.last_sweep !== undefined) validateSweepCounters(s.last_sweep, true);
     if (s.disposal_queued_at !== undefined) {

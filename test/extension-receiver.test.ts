@@ -127,7 +127,7 @@ test('pending preselection prevents approve-to-select race and isolates all wake
   assert.deepEqual((await f.ext(f.secrets[0], '/extension/archive/next', {})).data, {archive: null});
   assert.equal(f.app.wakes.archiveLease, null);
   assert.equal(f.app.config.wake_state!.archives.length, 1);
-  const archive = (await f.ext(f.secrets[1], '/extension/archive/next')).data.archive;
+  const archive = (await f.ext(f.secrets[1], '/extension/archive/next', {verify:1})).data.archive;
   assert.equal(archive.url, 'https://chatgpt.com/c/review-archive');
   assert.equal((await f.ext(f.secrets[0], '/extension/archive/result', {nonce: archive.nonce, ok: true})).status, 403);
   assert.equal(f.app.config.wake_state!.archives.length, 1);
@@ -265,7 +265,7 @@ test('changes require complete idle: gateway jobs, queued/issued/claimed wakes a
   assert.equal((await f.select(b.id)).status, 409);
   assert.equal((await f.ext(f.secrets[0], '/extension/result', {nonce: ticket.nonce, ok: false})).status, 200);
   f.app.config.wake_state!.archives.push('https://chatgpt.com/c/lease-test');
-  const lease = (await f.ext(f.secrets[0], '/extension/archive/next')).data.archive;
+  const lease = (await f.ext(f.secrets[0], '/extension/archive/next', {verify:1})).data.archive;
   assert.equal((await f.select(b.id)).status, 409);
   assert.equal((await f.ext(f.secrets[0], '/extension/archive/result', {nonce: lease.nonce, ok: true})).status, 200);
   assert.equal((await f.select(b.id)).status, 200);

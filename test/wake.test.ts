@@ -124,7 +124,7 @@ test('delete mode hides only chats confirmed as started by this lane', () => {
   f.wakes.archiveResult({nonce: laneCreated.nonce, ok: true});
 
   f.config.wake_state!.archives.push('https://chatgpt.com/c/not-started-here');
-  const foreign = f.wakes.archiveNext().archive!;
+  const foreign = f.wakes.archiveNext(true).archive!;
   assert.equal(foreign.url, 'https://chatgpt.com/c/not-started-here');
   assert.equal(foreign.remove, true); assert.equal(foreign.verify, true);
 });
@@ -146,13 +146,13 @@ test('saved, retained and pending-archive URLs cannot be presented as fresh chat
 
 test('failed archives retry after backoff and survive restarting Wakes', () => {
   const f = fixture({labels: {sol: {row: 'Latest', level: 0, url: 'https://chatgpt.com/c/old'}}}); f.confirm(f.begin());
-  const first = f.wakes.archiveNext().archive;
+  const first = f.wakes.archiveNext(true).archive;
   f.wakes.archiveResult({nonce: first!.nonce, ok: false});
-  assert.equal(f.wakes.archiveNext().archive, null);
-  f.advance(30001); const retry = f.wakes.archiveNext().archive;
+  assert.equal(f.wakes.archiveNext(true).archive, null);
+  f.advance(30001); const retry = f.wakes.archiveNext(true).archive;
   assert.notEqual(retry!.nonce, first!.nonce); assert.equal(retry!.url, first!.url);
   const restarted = new Wakes(f.config, f.now);
-  const archive = restarted.archiveNext().archive;
+  const archive = restarted.archiveNext(true).archive;
   restarted.archiveResult({nonce: archive!.nonce, ok: true});
   assert.deepEqual(f.config.wake_state!.archives, []);
   assert.throws(() => restarted.archiveResult({nonce: archive!.nonce, ok: true}), e => e.status === 409);
@@ -160,9 +160,9 @@ test('failed archives retry after backoff and survive restarting Wakes', () => {
 
 test('expired archive leases retry and cannot acknowledge success late', () => {
   const f = fixture({labels: {sol: {row: 'Latest', level: 0, url: 'https://chatgpt.com/c/old'}}}); f.confirm(f.begin());
-  const t = f.wakes.archiveNext().archive; f.advance(120001);
+  const t = f.wakes.archiveNext(true).archive; f.advance(120001);
   assert.throws(() => f.wakes.archiveResult({nonce: t!.nonce, ok: true}), e => e.status === 409);
-  assert.equal(f.wakes.archiveNext().archive!.url, t!.url);
+  assert.equal(f.wakes.archiveNext(true).archive!.url, t!.url);
 });
 
 test('failure cooldown is per label and retries after one minute, never storing supplied errors', () => {
@@ -256,9 +256,9 @@ test('expired unclaimed nonce cannot report a newly sent orphan chat', () => {
 
 test('archive failures rotate the queue so an unavailable chat cannot starve other archives', () => {
   const f = fixture(); f.config.wake_state!.archives = ['https://chatgpt.com/c/first', 'https://chatgpt.com/c/second'];
-  const first = f.wakes.archiveNext().archive;
+  const first = f.wakes.archiveNext(true).archive;
   f.wakes.archiveResult({nonce: first!.nonce, ok: false}); f.advance(30001);
-  const next = f.wakes.archiveNext().archive; assert.equal(next!.url, 'https://chatgpt.com/c/second');
+  const next = f.wakes.archiveNext(true).archive; assert.equal(next!.url, 'https://chatgpt.com/c/second');
   f.wakes.archiveResult({nonce: next!.nonce, ok: true}); assert.deepEqual(f.config.wake_state!.archives, [first!.url]);
 });
 

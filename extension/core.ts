@@ -268,7 +268,7 @@ type SweepCandidate = {id: string; created_at: number; matched?: boolean; classi
 type OwnerSample = {id: string; title: string; create_time: number; archived: boolean};
 // Never write titles to extension storage. Reloads intentionally lose these samples.
 const inventoryMemory = new WeakMap<object, {titles: Map<string, string>; samples: OwnerSample[]}>();
-type SweepCursor = {archived: boolean; offset: number; pending: SweepCandidate[]; next_offset: number; end: boolean};
+type SweepCursor = {archived: boolean; offset: number; pending: SweepCandidate[]; next_offset: number; end: boolean; seen?: string[]};
 /** Resume a bounded pass through both listings. Only approved, proven wake messages are deleted. */
 export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fetcher: Fetcher = fetch, now: () => number = Date.now): Promise<void> {
   const store = browser.storage?.local as any;
@@ -279,6 +279,8 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
   const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string').slice(-sweepChecked) : []);
   const continuing = !!previous.cursor && !previous.pass_complete && previous.inventory_version === 1;
   let cursor: SweepCursor = continuing ? structuredClone(previous.cursor) : {archived: false, offset: 0, pending: [], next_offset: 0, end: false};
+  // A queue deletion between runs can shift unseen rows into the previous page.
+  let overlap = continuing;
   if (!continuing || !inventoryMemory.has(store)) inventoryMemory.set(store, {titles: new Map(), samples: []});
   const memory = inventoryMemory.get(store)!;
   const sample = (id: string, created: number, archived: boolean) => {
@@ -329,12 +331,13 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
     while (withinBudget()) {
       const side = cursor.archived ? 'archived' : 'visible';
       if (!cursor.pending.length) {
-        if (cursor.end) {
+        if (cursor.end && !overlap) {
           if (cursor.archived) {report.pass_complete = true; break;}
           cursor = {archived: true, offset: 0, pending: [], next_offset: 0, end: false};
           continue;
         }
-        cursor.offset = cursor.next_offset;
+        cursor.offset = overlap ? Math.max(0, cursor.next_offset - 100) : cursor.next_offset;
+        overlap = false;
         const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=' + cursor.offset + '&limit=100&order=created&is_archived=' + cursor.archived,
           {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
         if (!listing.ok) throw Error('list_failed');
@@ -354,12 +357,15 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
         cursor.end = items.length < 100;
         for (let i = 0; i < items.length; i++) {
           const item = items[i], candidate = metadata.find(c => c.id === item?.id);
-          if (!candidate) continue;
+          if (!candidate || cursor.seen?.includes(candidate.id)) continue;
+          (cursor.seen ??= []).push(candidate.id);
           if (typeof item.title === 'string') memory.titles.set(candidate.id, Array.from(item.title).slice(0, 80).join(''));
           classify(candidate, known.has(candidate.id) ? 'crossfeed' : candidate.created_at < sweepFloor || checked.has(candidate.id) ? 'owner' : 'unclassified', cursor.archived);
           if (candidate.classification === 'unclassified' && candidate.created_at >= sweepFloor && now() - candidate.created_at >= sweepMinAgeMs) cursor.pending.push(candidate);
           else memory.titles.delete(candidate.id);
         }
+        // Two pages cover the bounded overlap without retaining titles on disk.
+        cursor.seen = cursor.seen?.slice(-200);
         await save();
         if (!cursor.pending.length) continue;
       }
@@ -405,7 +411,7 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
       }
     }
     // Finishing the last allowed detail need not require an otherwise empty extra poll.
-    if (!cursor.pending.length && cursor.end && cursor.archived) report.pass_complete = true;
+    if (!overlap && !cursor.pending.length && cursor.end && cursor.archived) report.pass_complete = true;
   } catch { if (!report.errors) report.errors = 1; }
   report.pass_errors = Number(report.pass_errors) + Number(report.errors);
   if (report.pass_complete) {
@@ -602,7 +608,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       const pairedConfig = config;
       ({ ticket } = await request(config, '/extension/next', undefined, fetcher));
       if (ticket == null) {
-        const { archive } = await request(config, '/extension/archive/next', undefined, fetcher);
+        const { archive } = await request(config, '/extension/archive/next', {verify: 1}, fetcher);
         if (!archive) { await sweepWakeChats(config, browser, fetcher, now); return; }
         if (!validTicket({ ...archive, label: 'archive', connector: 'archive', row: 'archive', level: 0 }, now()) || !savedChatURL(archive.url)) throw Error('invalid_ticket');
         const outcome = await deleteQueuedConversation(archive.url, archive.verify === true);
