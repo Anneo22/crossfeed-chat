@@ -78,6 +78,7 @@ test('private legacy bootstrap stays packaged and validates one exact 128-bit ti
 function workerFixture(options: Record<string, any> = {}) {
   const events: any[] = [];
   let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0, rootLoads = 0, pickerClicks = 0, previousPosition = position, lastKeyAt = -Infinity;
+  let prefillPointReads = 0;
   const value: any = {...ticket(), ...(Object.hasOwn(options, 'wakeMode') ? {wake_mode: options.wakeMode} : {}), ...(options.composer ? {type: 'composer', job_id: 'job_1', attachments: [{name: 'x.txt', path: '/tmp/x.txt', mime: 'text/plain', bytes: 1}]} : {}), ...(options.ticket ?? {}), expires_at: clock + 240000}, point = (n: any) => ({x: n, y: n});
   const fetcher = async (url: any, init: any) => {
     const path = new URL(url).pathname, body = init.body && JSON.parse(init.body);
@@ -191,7 +192,7 @@ function workerFixture(options: Record<string, any> = {}) {
             clock += options.pickerClickMs ?? 0;
             if (++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
           }
-          if (params.x === 8 && !options.prefillPickerNeverOpens) pickerOpen = !pickerOpen;
+          if (params.x === (options.prefillTargetMoves && prefillPointReads >= 4 ? 9 : 8) && !options.prefillPickerNeverOpens) pickerOpen = !pickerOpen;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
           if (['ArrowLeft', 'ArrowRight'].includes(params.key)) { previousPosition = position; lastKeyAt = clock; }
@@ -216,10 +217,11 @@ function workerFixture(options: Record<string, any> = {}) {
       if (opts.func === prefillModel) {
         events.push({modelProof: {target: opts.target, args: opts.args}});
         const isPoint = opts.args[4] === 'point';
+        if (isPoint) { prefillPointReads++; clock += options.prefillGuardMs ?? 0; }
         if (options.prefillRequiresFocus && !options.prefillFocused) return [{documentId: 'prefill-document',
           result: {verified: false, error: 'level_unconfirmed', diagnostic: {action: opts.args[4], models: 0, menus: 0}}}];
         return [{documentId: options.postPrefillDocumentChanged ? 'changed-document' : 'prefill-document',
-          result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(8),open:pickerOpen} :
+          result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(options.prefillTargetMoves && prefillPointReads >= 4 ? 9 : 8),open:pickerOpen} :
             options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed',diagnostic:options.postPrefillModelDiagnostic} :
             {verified: true, row: value.row, level: value.level, maximum: opts.args[1]}}];
       }
@@ -390,6 +392,15 @@ test('configured native wake retains renderer focus through send and registratio
   assert.equal(f.events.find(e=>e.create)?.create.active,false);
 });
 
+test('configured prefill retargets each trusted event after layout moves during its authority probes', async () => {
+  const f=workerFixture({wakeMode:'configured',prefillTargetMoves:true,prefillGuardMs:1100}); await run(f);
+  assert.equal(f.events.find(e=>e.path==='/extension/result')?.body?.ok,true);
+  assert.equal(prefillCount(f),1);
+  const post=f.events.slice(f.events.findIndex(e=>e.update)+1);
+  const released=post.filter(e=>e.method==='Input.dispatchMouseEvent'&&e.params.type==='mouseReleased');
+  assert.equal(released.length,1); assert.equal(released[0].params.x,9);
+});
+
 test('configured native proof refuses a missing target or ignored trusted input without sending', async () => {
   for(const options of [{prefillPointMissing:true},{prefillPickerNeverOpens:true},{postPrefillForeign:true}]) {
     const f=workerFixture({wakeMode:'configured',...options});await run(f);
@@ -450,7 +461,7 @@ test('post-prefill model diagnostics retain bounded observations, not page text 
     postPrefillModelDiagnostic:{action:'observe',models:1,menus:1,selected:1,sliders:1,rowMatches:true,minimum:0,maximum:4,position:1,statusMatches:false,raw:'private',status:'private',nonce:'private'}});
   await run(f);const {raw,value}=wakeDiagnostic(f);
   assert.equal(value.checkpoint,'prefill_model');assert(!raw.includes('private'));
-  assert.deepEqual(value.model,{action:'observe',models:1,menus:1,selected:1,sliders:1,minimum:0,maximum:4,position:1,rowMatches:true,statusMatches:false});
+  assert.deepEqual(value.model,{action:'observe',models:1,menus:1,selected:1,sliders:1,minimum:0,maximum:4,position:1,clicks:1,rowMatches:true,statusMatches:false,pointMoved:false});
   assert.equal(prefillCount(f),0);
 });
 test('ordinary wake uses exact native prefill, one page send attempt and no debugger or picker input', async () => {

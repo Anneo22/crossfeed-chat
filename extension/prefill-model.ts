@@ -39,14 +39,22 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
     if (model && (models.length !== 1 || models[0] !== model)) return fail('page_changed');
     if (models.length === 1) {
       model = models[0];
-      if (model.getAttribute('aria-disabled') === 'true' || (model as HTMLButtonElement).disabled) return fail('level_unconfirmed');
-      if (action === 'point') {
+      const enabled = model.getAttribute('aria-disabled') !== 'true' && !(model as HTMLButtonElement).disabled;
+      diagnostic.enabled = enabled;
+      // The native draft can precede the trigger's interactivity. Wait within
+      // the existing hydration budget; never click a disabled/occluded target.
+      if (enabled && action === 'point') {
         const r = model.getBoundingClientRect();
         const x = r.x + r.width / 2, y = r.y + r.height / 2;
         if (![x, y, r.width, r.height].every(Number.isFinite) || r.width <= 0 || r.height <= 0) return fail('level_unconfirmed');
-        return {verified: false, ready: true, modelPoint: {x, y}, open: menus.length === 1};
+        const hit = document.elementFromPoint(x, y);
+        diagnostic.hitOwned = !!hit && model.contains(hit);
+        // An already-open modal menu may intentionally cover its trigger. It
+        // needs only read authority for Escape, not another trigger click.
+        if (menus.length === 1 || diagnostic.hitOwned)
+          return {verified: false, ready: true, modelPoint: {x, y}, open: menus.length === 1};
       }
-      if (menus.length === 1) {
+      if (enabled && action === 'observe' && menus.length === 1) {
         if (ownedMenu && ownedMenu !== menus[0]) return fail('page_changed');
         ownedMenu = menus[0];
         const rows = [...ownedMenu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];

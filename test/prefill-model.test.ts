@@ -6,14 +6,16 @@ const globals: any = globalThis;
 const ticket = () => ({nonce:'a'.repeat(32),label:'wake-'+'a'.repeat(32),connector:'Crossfeed Chat',row:'Latest',level:2,expires_at:Date.now()+60000});
 const prompt = (t:ReturnType<typeof ticket>) => `@${t.connector} wake up. First gateway_exchange: worker_label=${JSON.stringify(t.label)} exactly as issued, wake_nonce=${JSON.stringify(t.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(t.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
 function fixture(options:Record<string,any>={}) {
-  let modelReads=0, statusReads=0, sliderReads=0;
+  let modelReads=0, statusReads=0, sliderReads=0, hitReads=0;
   const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[],getBoundingClientRect:()=>({x:10,y:20,width:40,height:30}),click:()=>assert.fail('page proof must not synthesize click'),dispatchEvent:()=>assert.fail('page proof must not synthesize pointer input')});
   const row=node(options.row??'Latest',{'aria-checked':'true'});
   const slider=node('',{'aria-valuemin':options.minimum??'0','aria-valuemax':options.maximum??'2','aria-valuenow':options.position??'2'});
   const status=node(options.status??'High, 3 of 3.');
   const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
   const model=node('',options.disabled?{'aria-disabled':'true'}:{});
-  const doc={querySelectorAll:(selector:string)=>{
+  const getAttribute=model.getAttribute; model.getAttribute=(name:string)=>name==='aria-disabled'&&modelReads<=(options.disabledReads??0)?'true':getAttribute(name);
+  const child=node(), obstruction=node(); model.contains=(el:any)=>el===model||el===child;
+  const doc={elementFromPoint:()=>options.occluded||++hitReads<=(options.occludedReads??0)?obstruction:options.hitChild?child:model,querySelectorAll:(selector:string)=>{
     if(selector.includes('model-switcher')) {
       options.onModelRead?.();
       return options.noModel || ++modelReads <= (options.delayedModelReads ?? 0) ? [] : options.duplicateModel?[model,model]:[model];
@@ -45,6 +47,14 @@ test('configured model pointer target is read-only, unique and pinned to the aut
   for(const options of [{duplicateModel:true},{duplicateMenu:true},{disabled:true},{url:'https://evil.example/'}])
     assert.notEqual((await run({...options,action:'point'})).ready,true);
 });
+test('point waits for a transiently disabled hydrated trigger without dispatching input',async()=>{
+  assert.equal((await run({action:'point',open:false,disabledReads:2,timeoutMs:500})).ready,true);
+});
+test('point waits for an occluder to clear and accepts only the trigger or its descendant hit',async()=>{
+  assert.notEqual((await run({action:'point',open:false,occluded:true})).ready,true);
+  assert.equal((await run({action:'point',open:false,occludedReads:2,hitChild:true,timeoutMs:500})).ready,true);
+});
+
 test('configured Pro proof waits for the native picker announcement to catch up',async()=>{
   assert.deepEqual(await run({level:4,expectedMaximum:4,position:'4',maximum:'4',status:'Pro, 5 of 5.',statusLagReads:2,staleStatus:'Extra High, 4 of 5.',timeoutMs:500}),{verified:true,row:'Latest',level:4,maximum:4});
 });
@@ -58,7 +68,7 @@ test('pointer acquisition waits up to the native hydration budget, without exten
   assert.equal((await run(options)).verified,false); // Observe still has its strict five-second budget.
 });
 test('disabled model target failures retain bounded counts for diagnosis',async()=>{
-  assert.deepEqual((await run({action:'point',disabled:true})).diagnostic,{action:'point',models:1,menus:1});
+  assert.deepEqual((await run({action:'point',disabled:true})).diagnostic,{action:'point',models:1,menus:1,enabled:false});
 });
 test('configured model proof refuses when the trigger stays missing',async()=>{
   assert.equal((await run({noModel:true})).verified,false);

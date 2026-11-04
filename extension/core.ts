@@ -132,11 +132,11 @@ function safeWakeDiagnostic(candidate: unknown, failureCode: string, timestamp: 
   if (input.model && typeof input.model === 'object') {
     const model = input.model as Record<string, unknown>, safe: Record<string, boolean | number | string> = {};
     if (model.action === 'point' || model.action === 'observe') safe.action = model.action;
-    for (const key of ['models','menus','selected','sliders','minimum','maximum','position']) {
+    for (const key of ['models','menus','selected','sliders','minimum','maximum','position','clicks']) {
       const value = model[key];
       if (typeof value === 'number' && Number.isInteger(value) && value >= -1 && value <= 8) safe[key] = value;
     }
-    for (const key of ['rowMatches','statusMatches']) if (typeof model[key] === 'boolean') safe[key] = model[key];
+    for (const key of ['rowMatches','statusMatches','enabled','hitOwned','pointMoved']) if (typeof model[key] === 'boolean') safe[key] = model[key];
     Object.assign(output,{model:safe});
   }
   return output;
@@ -654,6 +654,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           // A configured wake must retain the actual saved picker selection
           // across native navigation; never silently fall back to defaults.
           stage = 'prefillModel';
+          const modelMetrics = {clicks: 0, pointMoved: false};
           const modelRead = async (action: 'point' | 'observe'): Promise<PrefillModelResult> => {
             const current = await getOwnedTab(), phase = ordinaryWakePhase(current.url, prompt);
             if (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') || phase < nativePhase) throw Error('page_changed');
@@ -664,7 +665,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
               target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args,
             });
             wakeDiagnostic = {checkpoint:'prefill_model', ...wakeTabDiagnostic(current,prompt), probe:probeState,
-              model:value?.result?.diagnostic ?? {action,models:value?.result?.ready?1:0,menus:value?.result?.open?1:0}};
+              model:{...(value?.result?.diagnostic ?? {action,models:value?.result?.ready?1:0,menus:value?.result?.open?1:0}),...modelMetrics}};
             if (value?.documentId !== documentId || value?.result?.error === 'page_changed') throw Error('page_changed');
             if (!value?.result || action === 'point' && value.result.ready !== true) throw Error('level_unconfirmed');
             return value.result;
@@ -681,8 +682,18 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           // Every input is guarded by owned-tab URL and pinned-document proof.
           if ((await modelRead('point')).open) throw Error('level_unconfirmed');
           const input = async (method: string, params: Record<string, unknown>) => {
-            await modelRead('point');
+            const fresh = await modelRead('point');
+            if (method === 'Input.dispatchMouseEvent') {
+              const p = fresh.modelPoint;
+              if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('level_unconfirmed');
+              // Hydrating/expanding the native draft can move the trigger while
+              // these authority probes await IPC. Use the newly attested point,
+              // not the stale coordinates from before the guarded sequence.
+              modelMetrics.pointMoved ||= p.x !== params.x || p.y !== params.y;
+              params = {...params, x:p.x, y:p.y};
+            }
             await browser.debugger.sendCommand({tabId: activeTab.id}, method, params);
+            if (method === 'Input.dispatchMouseEvent' && params.type === 'mouseReleased') modelMetrics.clicks = Math.min(8, modelMetrics.clicks + 1);
           };
           const openDeadline = Math.min(activeTicket.expires_at, now() + 5000);
           while (!(await modelRead('point')).open) {
