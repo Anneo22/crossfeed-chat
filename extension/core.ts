@@ -338,7 +338,7 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
         }
         cursor.offset = overlap ? Math.max(0, cursor.next_offset - 100) : cursor.next_offset;
         overlap = false;
-        const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=' + cursor.offset + '&limit=100&order=created&is_archived=' + cursor.archived,
+        const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=' + cursor.offset + '&limit=100&order=updated&is_archived=' + cursor.archived,
           {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
         if (!listing.ok) throw Error('list_failed');
         const items = (await listing.json())?.items;

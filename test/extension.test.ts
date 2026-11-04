@@ -1428,6 +1428,8 @@ function sweepFixture(options: {service?: (candidates: any[]) => string[]; chats
     if (url.includes('/backend-api/conversations?')) {
       if (options.failList) return {ok: false, status: options.failList};
       const u = new URL(url);
+      // Observed live on 5 Nov 2026: ChatGPT answers order=created with HTTP 500; only order=updated lists.
+      if (u.searchParams.get('order') !== 'updated') return {ok: false, status: 500};
       return {ok: true, json: async () => ({items: u.searchParams.get('is_archived') === 'true' ? [] : Object.entries(options.chats).map(([id, c]) => ({id, title: 'x', create_time: c.created})).slice(Number(u.searchParams.get('offset')), Number(u.searchParams.get('offset')) + 100)})};
     }
     const id = url.split('/').at(-1)!;

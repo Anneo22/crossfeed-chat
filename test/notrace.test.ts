@@ -62,7 +62,7 @@ function sweepFake(t: any, count = 145) {
     if(u.pathname.endsWith('/conversations')) {
       listings.push(u); const list=lists[u.searchParams.get('is_archived')==='true'?1:0];
       const offset=Number(u.searchParams.get('offset'));
-      assert.equal(u.searchParams.get('order'),'created'); assert.equal(u.searchParams.get('limit'),'100');
+      assert.equal(u.searchParams.get('order'),'updated'); assert.equal(u.searchParams.get('limit'),'100'); // live 5 Nov 2026: order=created returns HTTP 500
       return {ok:true,json:async()=>({items:list.slice(offset,offset+100)})};
     }
     const id=u.pathname.split('/').at(-1)!;
