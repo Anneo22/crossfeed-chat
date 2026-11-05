@@ -198,6 +198,7 @@ async function disposeConversation(token: string, id: string, signal: AbortSigna
     headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
     body: JSON.stringify({is_visible: false}),
   });
+  if (response.status === 429) throw Object.assign(Error('rate_limited'), {rateLimited: true});
   // A conversation that is already gone (owner or lead deleted it) is disposed: never retry it forever.
   return response.ok || response.status === 404;
 }
@@ -274,6 +275,8 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
   const store = browser.storage?.local as any;
   if (typeof store?.get !== 'function' || typeof store?.set !== 'function') return;
   const previous = ((await store.get(['crossfeedSweep'])) ?? {}).crossfeedSweep ?? {};
+  // ChatGPT answered 429: no ChatGPT call at all until the back-off ends (his own use shares the limit).
+  if (Number(previous.rate_limited_until) > now()) return;
   if (previous.pass_complete === true && previous.backlog === 0 && previous.errors === 0 &&
     (previous.pass_errors ?? previous.errors) === 0 && previous.pass_wake_matches_visible === 0 && previous.pass_wake_matches_archived === 0 && now() - previous.at < sweepEveryMs) return;
   const checked = new Set<string>(Array.isArray(previous.checked) ? previous.checked.filter((id: unknown) => typeof id === 'string').slice(-sweepChecked) : []);
@@ -322,13 +325,13 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
   const save = async () => store.set({crossfeedSweep: {...report, cursor, checked: [...checked].slice(-sweepChecked)}});
   await save();
   const started = now(), signal = AbortSignal.timeout(20000);
-  let details = 0, pages = 0;
+  let details = 0, pages = 0, rateLimited = false;
   const withinBudget = () => !signal.aborted && now() - started < 20000 && details < sweepPerRun && pages < 10;
   try {
     const token = await chatgptToken(signal);
     if (!token) throw Error('no_session');
     const headers = {Authorization: 'Bearer ' + token};
-    while (withinBudget()) {
+    while (withinBudget() && !rateLimited) {
       const side = cursor.archived ? 'archived' : 'visible';
       if (!cursor.pending.length) {
         if (cursor.end && !overlap) {
@@ -340,6 +343,7 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
         overlap = false;
         const listing = await fetch('https://chatgpt.com/backend-api/conversations?offset=' + cursor.offset + '&limit=100&order=updated&is_archived=' + cursor.archived,
           {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
+        if (listing.status === 429) {rateLimited = true; break;}
         if (!listing.ok) throw Error('list_failed');
         const items = (await listing.json())?.items;
         if (!Array.isArray(items)) throw Error('list_shape');
@@ -382,6 +386,7 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
           details++;
           try {
             const response = await fetch('https://chatgpt.com/backend-api/conversation/' + id, {credentials: 'include', redirect: 'error', cache: 'no-store', signal, headers});
+            if (response.status === 429) throw Object.assign(Error('rate_limited'), {rateLimited: true});
             if (!response.ok && response.status !== 404) throw Error('detail_failed');
             if (response.status !== 404) {
               const first = firstUserText(await response.json());
@@ -399,7 +404,9 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
                 cursor.next_offset = Math.max(cursor.offset, cursor.next_offset - 1);
               }
             } else cursor.next_offset = Math.max(cursor.offset, cursor.next_offset - 1);
-          } catch {
+          } catch (error) {
+            // A 429 keeps this candidate for the next run instead of skipping it for the whole pass.
+            if ((error as {rateLimited?: boolean})?.rateLimited) {rateLimited = true; break;}
             report.errors = Number(report.errors) + 1;
             // Do not let one inaccessible chat starve the rest. It remains eligible next pass.
             if (signal.aborted || now() - started >= 20000) break;
@@ -412,7 +419,9 @@ export async function sweepWakeChats(config: APIConfig, browser: PollBrowser, fe
     }
     // Finishing the last allowed detail need not require an otherwise empty extra poll.
     if (!overlap && !cursor.pending.length && cursor.end && cursor.archived) report.pass_complete = true;
-  } catch { if (!report.errors) report.errors = 1; }
+  } catch (error) { if ((error as {rateLimited?: boolean})?.rateLimited) rateLimited = true; else if (!report.errors) report.errors = 1; }
+  report.rate_limited_until = rateLimited ? now() + sweepEveryMs : 0;
+  if (rateLimited) report.pass_complete = false;
   report.pass_errors = Number(report.pass_errors) + Number(report.errors);
   if (report.pass_complete) {
     report.last_pass_errors = report.pass_errors;

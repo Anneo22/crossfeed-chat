@@ -124,7 +124,7 @@ export function retainedUrls(config: Pick<Config, 'labels' | 'session_workers'>)
     ...Object.values(config.session_workers ?? {}).flatMap(s => s.url ? [s.url] : [])];
 }
 
-const sweepCounterKeys = ['at', 'listed_visible', 'listed_archived', 'candidates', 'approved', 'wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived', 'errors', 'pass_complete', 'backlog', 'pass_started_at', 'pass_wake_matches_visible', 'pass_wake_matches_archived', 'pass_deleted_visible', 'pass_deleted_archived', 'last_pass_started_at', 'last_pass_completed_at', 'last_pass_wake_matches_visible', 'last_pass_wake_matches_archived', 'last_pass_deleted_visible', 'last_pass_deleted_archived', 'pass_errors', 'last_pass_errors'];
+const sweepCounterKeys = ['at', 'listed_visible', 'listed_archived', 'candidates', 'approved', 'wake_matches_visible', 'wake_matches_archived', 'deleted_visible', 'deleted_archived', 'errors', 'pass_complete', 'backlog', 'pass_started_at', 'pass_wake_matches_visible', 'pass_wake_matches_archived', 'pass_deleted_visible', 'pass_deleted_archived', 'last_pass_started_at', 'last_pass_completed_at', 'last_pass_wake_matches_visible', 'last_pass_wake_matches_archived', 'last_pass_deleted_visible', 'last_pass_deleted_archived', 'pass_errors', 'last_pass_errors', 'rate_limited_until'];
 const inventoryCounterKeys = ['listed_visible','listed_archived','crossfeed_visible','crossfeed_archived','owner_visible','owner_archived',
   'unclassified_visible','unclassified_archived','owner_min_create_time','owner_max_create_time'];
 sweepCounterKeys.push('inventory_version', 'inventory_errors', ...inventoryCounterKeys.flatMap(k => [k, 'pass_'+k, 'last_pass_'+k]));

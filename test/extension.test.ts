@@ -1472,7 +1472,8 @@ test('approved sweep reports done even when no chat can be deleted', async () =>
 });
 
 test('sweep retries a backlog on idle polls, throttles empty complete passes and remembers checked chats', async () => {
-  const f = sweepFixture({chats: {}, failList: 429});
+  // A generic listing failure (500) retries on the next idle poll; a 429 backs off (own test below).
+  const f = sweepFixture({chats: {}, failList: 500});
   await f.run();
   assert.equal(f.store.crossfeedSweep.errors, 1); assert.ok(f.store.crossfeedSweep.backlog > 0);
   const calls = f.calls.length; await f.run();
@@ -1629,4 +1630,23 @@ test('a page call that never answers after send fails the wake and closes its ta
   assert.equal(result.body.ok, false);
   assert.equal(result.body.error, 'page_not_ready');
   assert.equal(f.events.some((e: any) => e.remove === 7), true);
+});
+
+test('sweep stops on a ChatGPT 429, keeps the candidate and backs off ten minutes', async () => {
+  // Observed live on 5 Nov 2026: detail fetches answered 429 and each idle poll retried 30 of them.
+  const chats: Record<string, {created: number | string; first: string; fetchStatus?: number}> = {};
+  const probe = sweepFixture({chats});
+  for (let i = 0; i < 5; i++) chats['w' + i] = {created: probe.iso(3600000 + i), first: wakeFirst, fetchStatus: 429};
+  await probe.run();
+  const details = () => probe.calls.filter(c => /^GET \/backend-api\/conversation\/w/.test(c)).length;
+  assert.equal(details(), 1, 'the first 429 ends the run');
+  assert.equal(probe.patches.length, 0);
+  assert.ok(Number(probe.store.crossfeedSweep.rate_limited_until) > Date.parse('2026-10-20T12:00:00Z'));
+  assert.equal(probe.store.crossfeedSweep.pass_complete, false);
+  probe.advance(30000); await probe.run();
+  assert.equal(details(), 1, 'no ChatGPT call while backing off');
+  for (const id of Object.keys(chats)) delete chats[id].fetchStatus;
+  probe.advance(600000); await probe.run();
+  assert.equal(probe.patches.length, 5, 'the kept candidates are deleted after the back-off');
+  assert.ok(probe.patches.every(p => p.body.is_visible === false));
 });
