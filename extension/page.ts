@@ -303,7 +303,7 @@ export function pageWake(ticket: PageTicket, action: PageAction): PageProbe {
   // form-owned editor so another editable field cannot receive trusted input.
   const editor = one(document, 'form #prompt-textarea[contenteditable="true"], form [contenteditable="true"][role="textbox"]');
   if (action === 'discardOwnDraft' || action === 'discardBareMention') {
-    // A bare mention carries no words of the owner's, so it can only be wake residue.
+    // A bare mention carries no words of the user's, so it can only be wake residue.
     const mine = action === 'discardBareMention'
       ? (text: string) => text.trim().toLowerCase() === `@${ticket.connector}`.toLowerCase()
       : (text: string) => text.startsWith(`@${ticket.connector}`);

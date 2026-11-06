@@ -631,7 +631,7 @@ def listen(args):
                     observer = None
                     native_closed = True
             drain_native()
-            ready_status = False  # success authorizes only this iteration's dispatch
+            ready_status = False  # a successful status tick authorizes only the dispatch in the current loop pass
             if args.status_url and (status_future is None or status_future.done()):
                 if status_future is not None:
                     ready_status = _status_tick(engine, status_future)

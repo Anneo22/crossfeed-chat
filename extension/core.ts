@@ -448,7 +448,7 @@ async function groupWorkerTab(browser: PollBrowser, tab: Tab, ticket: Ticket): P
 
 // Tabs (and, for native wakes, the window) this extension opened for a wake.
 // A record is a claim on that tab, not on the window: closing it must never
-// close tabs the owner later added to the same window.
+// close tabs the user later added to the same window.
 const ownedWakeTabsKey = 'crossfeedWakeTabs';
 
 function ownedWakeTab(value: unknown): OwnedWakeTab | null {
@@ -660,7 +660,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
       // Ordinary native wakes have an independent minimized normal window.
       // Chrome/KWin can still affect focus: desktop restoration is advisory.
       if (native) {
-        // A minimized normal window avoids Chrome raising the owner's app on macOS;
+        // A minimized normal window keeps Chrome from rising over the user's foreground app on macOS;
         // never group its active tab, which would restore/foreground that window.
         const window = await browser.windows.create({url: bootstrapURL ?? wakeURL, type: 'normal', state: 'minimized'});
         const own = window?.tabs;
@@ -684,7 +684,7 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           throw Error('browser_error');
         }
         // No grouping here: the job already has its own unfocused window, and grouping its active tab
-        // can raise Chrome over the owner's app (seen 19 Oct). Background tabs below are still grouped.
+        // can raise Chrome over the user's foreground app. Background tabs below are still grouped.
       } else {
         tab = await browser.tabs.create({url: home, active: false});
         await rememberOwnedWakeTab(browser, tab.id, undefined, now());

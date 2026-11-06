@@ -885,7 +885,7 @@ test('text inserted before a lost debugger reply is discarded without changing b
   assert.equal(f.events.filter(e => e.deleteDraft).length, 1);
 });
 
-test('a bare leftover mention is cleared before the wake and words of the owner are not', async () => {
+test('a bare leftover mention is cleared before the wake and words of the user are not', async () => {
   const f = draftWorkerFixture(); f.editor.textContent = '@Crossfeed Chat'; await run(f);
   assert.equal(f.events.filter(e => e.deleteDraft).length >= 1, true);
   assert.notEqual(f.events.find(e => e.path === '/extension/result').body.error, 'composer_not_empty');
@@ -1411,7 +1411,7 @@ test('first user message is read from the conversation tree, and an unreadable s
 
 function sweepFixture(options: {service?: (candidates: any[]) => string[]; chats: Record<string, {created: number | string; first: string; fetchStatus?: number}>; store?: any; failList?: number}) {
   const calls: string[] = [], patches: any[] = [], serviceCalls: any[] = [];
-  let clock = Date.parse('2026-10-20T12:00:00Z');
+  let clock = Date.parse('2026-10-20T12:00:00Z'); // publish-ok: history (fixture clock, not a date note)
   const store: Record<string, any> = options.store ?? {};
   const browser: any = {storage: {local: {get: async (keys: string[]) => Object.fromEntries(keys.filter(k => k in store).map(k => [k, structuredClone(store[k])])), set: async (values: any) => Object.assign(store, structuredClone(values))}}};
   const fetcher: any = async (url: any, init: any) => {
@@ -1464,7 +1464,7 @@ test('sweep deletes only approved, old conversations whose first message is a wa
 
 test('approved sweep reports done even when no chat can be deleted', async () => {
   for (const entry of [{first:'Personal conversation'}, {first:wakeFirst,fetchStatus:500}]) {
-    const fixture = sweepFixture({chats:{candidate:{created:'2026-10-01T00:00:00Z',...entry}}});
+    const fixture = sweepFixture({chats:{candidate:{created:'2026-10-01T00:00:00Z',...entry}}}); // publish-ok: history (fixture timestamp)
     await fixture.run();
     assert.deepEqual(fixture.patches, []);
     assert.equal(fixture.serviceCalls.find(c => c.path === '/extension/sweep/done')?.body.deleted_visible, 0);
@@ -1505,7 +1505,7 @@ test('idle poll triggers the sweep only when there is neither a wake nor an arch
   assert.equal(f.events.some((e: any) => e.create), false);
 });
 
-// ---- Owned wake tabs: records survive a dead poll, but never outlive the owner's intent ----
+// ---- Owned wake tabs: records survive a dead poll, but never outlive the user's intent ----
 
 function ownedTabFixture(records: any[], tabs: Record<number, any>,
   options: {removeThrows?: number[]} = {}) {
@@ -1579,7 +1579,7 @@ test('startup clears owned tab records without closing anything', async () => {
   assert.deepEqual(f.store.crossfeedWakeTabs, []);
 });
 
-test('an owned wake window keeps an extra tab the owner added', async () => {
+test('an owned wake window keeps an extra tab the user added', async () => {
   const f = ownedTabFixture([{tab: 7, window: 8, at: Date.now()}], {
     7: {id: 7, windowId: 8, url: 'https://chatgpt.com/c/orphan', status: 'complete'},
     9: {id: 9, windowId: 8, url: 'https://chatgpt.com/c/owner', status: 'complete'},
@@ -1641,7 +1641,7 @@ test('sweep stops on a ChatGPT 429, keeps the candidate and backs off ten minute
   const details = () => probe.calls.filter(c => /^GET \/backend-api\/conversation\/w/.test(c)).length;
   assert.equal(details(), 1, 'the first 429 ends the run');
   assert.equal(probe.patches.length, 0);
-  assert.ok(Number(probe.store.crossfeedSweep.rate_limited_until) > Date.parse('2026-10-20T12:00:00Z'));
+  assert.ok(Number(probe.store.crossfeedSweep.rate_limited_until) > Date.parse('2026-10-20T12:00:00Z')); // publish-ok: history (fixture clock)
   assert.equal(probe.store.crossfeedSweep.pass_complete, false);
   probe.advance(30000); await probe.run();
   assert.equal(details(), 1, 'no ChatGPT call while backing off');

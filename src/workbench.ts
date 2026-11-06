@@ -322,7 +322,7 @@ ${this.network ? '(allow network*)' : '(deny network*)'}`;
     const record = { tool: backgroundClient === undefined ? 'workbench_run' : 'workbench_start', root: root.id, command_id: commandId, command_sha256: digest, kind: args.shell === undefined ? 'named' : 'shell' };
     const deadline = Date.now() + 20000;
     this.audit({ ...record, state: 'command_started' });
-    // Preserve the owner's terminal environment, without handing gateway credentials
+    // Preserve the user's terminal environment, without handing gateway credentials
     // to child processes. This is not a secret isolation boundary in full mode.
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('CROSSFEED_')));
     env.CLAUDE_PROJECT_DIR = root.path;
