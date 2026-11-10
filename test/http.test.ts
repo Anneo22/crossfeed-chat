@@ -2310,4 +2310,8 @@ test('status reports the last gateway exchange of each worker with fixed fields 
   assert.deepEqual(Object.keys(worker.last_exchange).sort(), ['at', 'completion', 'entry_revoked', 'nonce', 'outcome']);
   assert.equal(worker.last_exchange.nonce, 'fresh'); assert.equal(worker.last_exchange.entry_revoked, false); assert.equal(worker.last_exchange.outcome, 'idle');
   assert(!JSON.stringify(worker).includes('n'.repeat(32)));
+  await f.rpc(tokens.access_token, 'tools/call', {name: 'gateway_exchange', arguments: {worker_label: 'sol', request_id: 'r'.repeat(32), claim_token: 'c'.repeat(32), response: 'x', files: [{download_url: 'https://example.com/a', file_id: 'f', size: 3}]}});
+  const refused = (await f.call('/status')).data.workers.find((w: any) => w.label === 'sol').replica_workers[0].last_exchange;
+  assert.equal(refused.completion, true); assert.match(refused.outcome, /^[a-z_]{1,60}$/);
+  assert(!JSON.stringify(refused).includes('c'.repeat(32)));
 });

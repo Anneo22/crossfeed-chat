@@ -51,7 +51,7 @@ export interface Worker {
   client: string; label: string; seen: number; polling: boolean; active: Job | null; stale?: boolean;
   conversation?: string; wake_nonce?: string;
   notify?: (() => void) | null; picker_receipt?: PickerReceipt; contacts?: number; idleUntil?: number; exchange?: object; revoked?: boolean;
-  last_exchange?: {at: number; entry_revoked: boolean; nonce: string; completion: boolean; outcome: string};
+  last_exchange?: {at: number; entry_revoked: boolean; nonce: string; completion: boolean; outcome: string; message?: string};
 }
 export interface ExchangeArguments {
   worker_label: string; wake_nonce?: string; request_id?: string; claim_token?: string; response?: string | null; tool_calls?: unknown;

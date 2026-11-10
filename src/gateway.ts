@@ -535,13 +535,17 @@ export class Gateway {
     const before = this.workers.get(args.worker_label);
     const entry = {at: this.now(), entry_revoked: !!before?.revoked, nonce: !args.wake_nonce ? 'absent' : args.wake_nonce === before?.wake_nonce ? 'same' : 'fresh',
       completion: ['claim_token', 'response', 'tool_calls', 'error', 'files'].some(k => args[k as keyof ExchangeArguments] !== undefined)};
-    const record = (outcome: string) => { const w = this.workers.get(args.worker_label); if (w) w.last_exchange = {...entry, outcome}; };
+    const record = (outcome: string, message?: string) => { const w = this.workers.get(args.worker_label); if (w) w.last_exchange = {...entry, outcome, ...(message ? {message} : {})}; };
     try {
       const result = await this.exchangeResolved(client,args,signal,conversation);
       const reason = 'reason' in result ? String(result.reason) : '';
       record(result.state !== 'released' ? result.state : /revoked/.test(reason) ? 'released_revoked' : /lease/.test(reason) ? 'released_idle' : /quota/.test(reason) ? 'released_quota' : 'released_other');
       return {...result,worker_label:args.worker_label};
-    } catch (error) { record('refused_' + (error instanceof Fault && /^[a-z_]{1,40}$/.test(error.code) ? error.code : 'error')); throw error; }
+    } catch (error) {
+      // Gateway refusal messages are fixed strings; keep one only when it has no token-like or free-form content.
+      const message = error instanceof Fault && /^[A-Za-z ,.;:'()\/-]{1,160}$/.test(error.message) ? error.message : undefined;
+      record('refused_' + (error instanceof Fault && /^[a-z_]{1,40}$/.test(error.code) ? error.code : 'error'), message); throw error;
+    }
   }
   async exchangeResolved(client: string, args: ExchangeArguments, signal?: AbortSignal, conversation?: string) {
     const identity = args.worker_label, {name,scope} = workerRoute(this.config, identity);
