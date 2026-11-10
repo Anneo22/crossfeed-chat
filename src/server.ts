@@ -163,6 +163,7 @@ async function startApp(options: AppOptions, release: () => void) {
     const identity = gateway.identities(name,scope).find(id => !gateway.workers.get(id)?.active && !gateway.workers.get(id)?.polling);
     if (identity) {
       if (!gateway.workerRoom(identity)) return;
+      if (gateway.refuseWakeAfterUnclaimed(name, scope)) return;
       if (healthy && !pairing.enabled) return;
       check(pairing.enabled, 'Approve an extension pairing before using wakes', 503);
       wakes.enqueue(identity, null, true, title ?? gateway.queued(name,scope)[0]?.request.title);
@@ -393,7 +394,12 @@ async function startApp(options: AppOptions, release: () => void) {
           if (req.method === 'POST' && url.pathname === '/extension/sweep/done') { const outcome = wakes.sweepDone(input, pairing.identify(bearer(req),origin)); extensionContact(); return json(res, 200, outcome); }
           if (req.method === 'POST' && url.pathname === '/extension/inventory/check') return json(res, 200, wakes.inventoryCheck(input));
           if (req.method === 'POST' && url.pathname === '/extension/inventory') return json(res, 200, wakes.inventorySamples(input));
-          if (req.method === 'POST' && url.pathname === '/extension/result') { const outcome = wakes.result(input); extensionContact(); return json(res, 200, outcome); }
+          if (req.method === 'POST' && url.pathname === '/extension/result') {
+            const outcome = wakes.result(input); extensionContact();
+            const ticket = object(input) && typeof input.nonce === 'string' ? wakes.tickets.get(input.nonce) : undefined;
+            if (ticket?.state === 'confirmed' && ticket.type !== 'composer') { const route = workerRoute(config, ticket.label); gateway.wakeRegistered(route.name, route.scope); }
+            return json(res, 200, outcome);
+          }
         } else {
           if (req.method === 'GET' && url.pathname === '/extensions/receiver') return json(res, 200, receiverStatus());
           if (req.method === 'POST' && url.pathname === '/extensions/receiver') {

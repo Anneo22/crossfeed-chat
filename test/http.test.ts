@@ -2250,3 +2250,64 @@ test('no-trace: a fresh authorized ordinary wake can replace a deleted job worke
     assert.equal(reply.state,'released'); await pending;
   }
 });
+
+test('an unscoped label claims its next queued job on a fresh wake after its previous job-owned chat was retired', {timeout: 10000}, async t => {
+  // Live 6 and 10 Nov 2026 (chatgpt:media-unattended): every fresh wake registered and polled,
+  // the job stayed queued, and the gateway opened a new chat about once a minute until the hourly cap.
+  const f = await fixture(t, {gateway: {timeoutMs: 5000, pollMs: 50}});
+  const tokens = await f.connect();
+  assert.equal((await f.call('/workers/add', {label: 'media', row: 'GPT-6', level: 1})).status, 200);
+  const ext = (route: string, input: any) => f.call(route, input, {key: f.extensionSecret});
+  const serve = async (conversation: string, text: string) => {
+    const reply = f.call('/v1/chat/completions', {model: 'chatgpt:media', messages: [{role: 'user', content: text}]}, {headers: {'Idempotency-Key': text.replace(' ', '-')}});
+    let ticket: any;
+    for (let i = 0; i < 200 && !ticket; i++) { ticket = (await ext('/extension/next', {})).data.ticket; if (!ticket) await new Promise(r => setTimeout(r, 5)); }
+    assert.ok(ticket, 'a wake ticket is issued: '+JSON.stringify([...f.app.wakes.tickets.values()])+JSON.stringify([...f.app.gateway.jobs.values()].map(j=>[j.state,j.label,j.error])));
+    assert.equal((await ext('/extension/claim', {nonce: ticket.nonce})).status, 200);
+    const poll = await f.rpc(tokens.access_token, 'tools/call', {name: 'gateway_exchange', arguments: {worker_label: ticket.label, wake_nonce: ticket.nonce, maximum_wait_seconds: 1}, _meta: {'openai/session': conversation}});
+    const work = poll.data.result.structuredContent;
+    assert.equal(work?.state, 'request', `fresh wake ${conversation} receives the queued job, got ${JSON.stringify(poll.data.result).slice(0, 300)}`);
+    assert.equal((await ext('/extension/result', {nonce: ticket.nonce, ok: true, url: `https://chatgpt.com/c/${conversation}`})).status, 200);
+    await f.rpc(tokens.access_token, 'tools/call', {name: 'gateway_exchange', arguments: {worker_label: ticket.label, wake_nonce: ticket.nonce, request_id: work.request.request_id, claim_token: work.request.claim_token, response: 'done ' + text, maximum_wait_seconds: 1}, _meta: {'openai/session': conversation}});
+    const result = await reply;
+    assert.equal(result.status, 200); assert.equal(result.data.choices[0].message.content, 'done ' + text);
+  };
+  await serve('chat-one', 'first image');
+  await serve('chat-two', 'second image');
+});
+
+test('registered wakes that never claim stop opening fresh chats after two and fail the job by name', {timeout: 10000}, async t => {
+  // Live 6 and 10 Nov 2026 (media-unattended): each fresh chat registered and polled, none claimed
+  // the queued job, and a new chat opened about once a minute until the hourly cap of 12.
+  const f = await fixture(t, {gateway: {timeoutMs: 5000, pollMs: 20}});
+  assert.equal((await f.call('/workers/add', {label: 'media', row: 'GPT-6', level: 1})).status, 200);
+  f.app.wakes.registeredContact = () => true;
+  const ext = (route: string, input: any) => f.call(route, input, {key: f.extensionSecret});
+  const reply = f.call('/v1/chat/completions', {model: 'chatgpt:media', messages: [{role: 'user', content: 'Draw five beavers.'}]}, {headers: {'Idempotency-Key': 'loop-1'}});
+  let issued = 0;
+  for (let i = 0; i < 400 && issued < 6; i++) {
+    f.app.gateway.prune();
+    const ticket = (await ext('/extension/next', {})).data.ticket;
+    if (!ticket) { if ([...f.app.gateway.jobs.values()].every(j => j.finished)) break; await new Promise(r => setTimeout(r, 5)); continue; }
+    issued++;
+    assert.equal((await ext('/extension/claim', {nonce: ticket.nonce})).status, 200);
+    assert.equal((await ext('/extension/result', {nonce: ticket.nonce, ok: true, url: `https://chatgpt.com/c/loop-${issued}`})).status, 200);
+  }
+  const result = await reply;
+  assert.equal(issued, 2, 'two registered fresh chats, then no more');
+  assert.equal(result.status, 503); assert.equal(result.data.error.code, 'worker_never_claimed');
+  const status = (await f.call('/status')).data;
+  assert.ok(status.jobs.some((j: any) => j.error === 'worker_never_claimed'));
+  const { diagnose } = await import('../src/cli.ts');
+  assert.match(diagnose(status).join('\n'), /media: fresh worker chats registered but none claimed job .*last_exchange/);
+});
+
+test('status reports the last gateway exchange of each worker with fixed fields and no tokens', {timeout: 10000}, async t => {
+  const f = await fixture(t, {gateway: {timeoutMs: 5000, pollMs: 20}});
+  const tokens = await f.connect();
+  await f.rpc(tokens.access_token, 'tools/call', {name: 'gateway_exchange', arguments: {worker_label: 'sol', wake_nonce: 'n'.repeat(32), maximum_wait_seconds: 1}});
+  const worker = (await f.call('/status')).data.workers.find((w: any) => w.label === 'sol').replica_workers[0];
+  assert.deepEqual(Object.keys(worker.last_exchange).sort(), ['at', 'completion', 'entry_revoked', 'nonce', 'outcome']);
+  assert.equal(worker.last_exchange.nonce, 'fresh'); assert.equal(worker.last_exchange.entry_revoked, false); assert.equal(worker.last_exchange.outcome, 'idle');
+  assert(!JSON.stringify(worker).includes('n'.repeat(32)));
+});

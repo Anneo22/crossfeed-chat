@@ -48,6 +48,7 @@ export function diagnose(status: ReturnType<App['status']>) {
     if (worker.quota_blocked) problems.push(`${worker.label}: ChatGPT quota is paused until ${new Date(worker.quota_until).toISOString()}. Next: wait for that time or use another label.`);
     else if (!worker.awake) problems.push(`${worker.label}: no active worker contact. Next: ${worker.saved && status.extension_enabled ? 'run wake ' + worker.label : 'open a fresh ChatGPT chat and wake this label with the connector'}.`);
   }
+  for (const job of status.jobs) if (job.error === 'worker_never_claimed') problems.push(`${job.label}: fresh worker chats registered but none claimed job ${job.id}, so it failed instead of opening more chats. Next: read workers[].replica_workers[].last_exchange in status (outcome released_revoked means the gateway kept the worker revoked), then retry with a new key.`);
   for (const job of status.jobs) if (job.error === 'uncertain_delivery') problems.push(`${job.label}: a delivered request has an unknown outcome (${job.id}). Next: inspect its ChatGPT chat before submitting new work; retrying its key returns the recorded error.`);
   for (const wake of status.wakes) if (['failed', 'expired'].includes(wake.state)) {
     const details = [wake.failure_code ? `reason=${wake.failure_code}` : '', wake.failure_stage ? `stage=${wake.failure_stage}` : ''].filter(Boolean).join(', ');

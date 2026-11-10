@@ -124,6 +124,8 @@ export class Gateway {
   onFinished: (job: Job) => boolean = () => false;
   // Host-held tokens (wake ticket nonces, local keys) that no returned file may show.
   liveTokens: () => string[] = () => [];
+  // Per route: did a fresh chat register since the last claim, and how many in a row did not claim.
+  unclaimedWakes = new Map<string, {registered: boolean; count: number}>();
   retentionTimer: ReturnType<typeof setInterval>;
   declare config: GatewayConfig; declare now: () => number; declare timeoutMs: number; declare pollMs: number; declare unclaimedMs: number; declare startupMs: number; declare leaseMs: number;
   declare waitForWake: boolean; declare extensionLastActivity?: () => number | undefined; declare extensionTicketUntil?: () => number | undefined; declare extensionGraceMs: number; declare audit: (job: JobRecord) => void; declare authorizeWorker: (identity: string, wakeNonce?: string, jobId?: string) => void; declare expireWake: (identity: string, nonce?: string) => void; declare saveBindings: (bindings: Record<string,string>) => void;
@@ -309,6 +311,25 @@ export class Gateway {
       }
     }
   }
+  /** A fresh worker chat for this route registered (it polled with its wake nonce). */
+  wakeRegistered(name: string, scope?: string) {
+    const key = JSON.stringify([name, scope ?? null]), entry = this.unclaimedWakes.get(key) ?? {registered: false, count: 0};
+    this.unclaimedWakes.set(key, {...entry, registered: true});
+  }
+  /**
+   * Before opening another fresh chat for queued work: if the last registered chats polled but never claimed,
+   * fail the queued jobs by name instead of looping (live 6 and 10 Nov 2026: a chat a minute until the hourly cap).
+   * Returns true when the wake must not be opened.
+   */
+  refuseWakeAfterUnclaimed(name: string, scope?: string, limit = 2) {
+    const key = JSON.stringify([name, scope ?? null]), entry = this.unclaimedWakes.get(key);
+    if (!entry?.registered) return false;
+    const count = entry.count + 1;
+    if (count < limit) { this.unclaimedWakes.set(key, {registered: false, count}); return false; }
+    this.unclaimedWakes.delete(key);
+    for (const job of this.queued(name, scope)) this.finish(job, new Fault(503, 'worker_never_claimed', `${limit} fresh worker chats registered and polled but none claimed this job, so it failed instead of opening more chats. Next: run doctor and inspect the worker; retry with a new key.`));
+    return true;
+  }
   secrets() {
     const tokens = [...this.liveTokens()];
     for (const job of this.jobs.values()) if (job.claim) tokens.push(job.claim);
@@ -324,7 +345,7 @@ export class Gateway {
       const replicas = [...identities].map(identity => {
         const w = this.workers.get(identity);
         return {identity, contact: !w ? 'never' : w.stale ? 'stale' : this.now() - w.seen < 45000 ? 'recent' : 'stale',
-          awake: this.workerAwake(w) && !this.blocked(name), polling: !!w?.polling, busy: !!w?.active};
+          awake: this.workerAwake(w) && !this.blocked(name), polling: !!w?.polling, busy: !!w?.active, last_exchange: w?.last_exchange ?? null};
       });
       const w = [...this.workers.values()].find(w => w.label === name && this.workerAwake(w)) ?? [...this.workers.values()].find(w => w.label === name);
       return { replicas: this.config.labels[name]?.replicas ?? 1, replica_workers: replicas, label: name, quota_until: this.quotaUntil(name), quota_blocked: this.blocked(name), model: `${this.config.prefix}:${name}`, saved: Object.hasOwn(this.config.labels, name), contact: !w ? 'never' : w.stale ? 'stale' : this.now() - w.seen < 45000 ? 'recent' : 'stale', processing_claim: replicas.some(r => r.busy), awake: replicas.some(r => r.awake), polling: replicas.some(r => r.polling), busy: replicas.some(r => r.busy), queued: [...this.jobs.values()].filter(j => !j.finished && j.label === name && j.state === 'queued').length };
@@ -510,7 +531,17 @@ export class Gateway {
   }
   async exchange(client: string, value: unknown, signal?: AbortSignal, conversation?: string) {
     const args = this.normalizeExchange(value);
-    return {...await this.exchangeResolved(client,args,signal,conversation),worker_label:args.worker_label};
+    // Bounded diagnostic of the last exchange per worker: fixed enums and booleans only, never tokens.
+    const before = this.workers.get(args.worker_label);
+    const entry = {at: this.now(), entry_revoked: !!before?.revoked, nonce: !args.wake_nonce ? 'absent' : args.wake_nonce === before?.wake_nonce ? 'same' : 'fresh',
+      completion: ['claim_token', 'response', 'tool_calls', 'error', 'files'].some(k => args[k as keyof ExchangeArguments] !== undefined)};
+    const record = (outcome: string) => { const w = this.workers.get(args.worker_label); if (w) w.last_exchange = {...entry, outcome}; };
+    try {
+      const result = await this.exchangeResolved(client,args,signal,conversation);
+      const reason = 'reason' in result ? String(result.reason) : '';
+      record(result.state !== 'released' ? result.state : /revoked/.test(reason) ? 'released_revoked' : /lease/.test(reason) ? 'released_idle' : /quota/.test(reason) ? 'released_quota' : 'released_other');
+      return {...result,worker_label:args.worker_label};
+    } catch (error) { record('refused_' + (error instanceof Fault && /^[a-z_]{1,40}$/.test(error.code) ? error.code : 'error')); throw error; }
   }
   async exchangeResolved(client: string, args: ExchangeArguments, signal?: AbortSignal, conversation?: string) {
     const identity = args.worker_label, {name,scope} = workerRoute(this.config, identity);
@@ -619,6 +650,7 @@ export class Gateway {
       if (job) {
         const claimedAt = this.now(), deadline = claimedAt + this.timeoutMs;
         this.persist(job, { state: 'claimed', claimed_at: claimedAt, deadline, client, worker: workerKey, claim: nonce(), receipt: w.picker_receipt ?? null, leaseUntil: Math.min(claimedAt + this.leaseMs, deadline) });
+        this.unclaimedWakes.delete(JSON.stringify([job.label, job.scope ?? null]));
         if (this.auditUnavailable) {this.stopWaiters(); return;}
         clearTimeout(job.claimTimer); clearTimeout(job.timer);
         this.armLease(job); w.active = job;
