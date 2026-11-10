@@ -5,6 +5,7 @@ import https from 'node:https';
 import dns from 'node:dns';
 import net from 'node:net';
 import { check, Fault, hash, nonce, object, privateDirectory, readPrivate, writePrivate } from './security.ts';
+import { FileScan, type ReadImageText } from './scan.ts';
 
 export const PART_BYTES = 20 * 1024 * 1024;
 export const REQUEST_BYTES = 50 * 1024 * 1024;
@@ -134,11 +135,11 @@ export function downloadHTTPS(value: string, {signal, limit = PART_BYTES}: Downl
 }
 
 export class Files {
-  declare directory: string; declare root: string; declare now: () => number; declare download: Download; declare rows: FileRecord[];
+  declare directory: string; declare root: string; declare now: () => number; declare download: Download; declare rows: FileRecord[]; declare scan: FileScan;
 
-  constructor(directory: string, {now = Date.now, download = downloadHTTPS}: {now?: () => number; download?: Download} = {}) {
+  constructor(directory: string, {now = Date.now, download = downloadHTTPS, readImageText}: {now?: () => number; download?: Download; readImageText?: ReadImageText} = {}) {
     this.directory = directory; this.root = path.join(directory, 'files'); privateDirectory(this.root);
-    this.now = now; this.download = download;
+    this.now = now; this.download = download; this.scan = new FileScan(directory, readImageText);
     this.rows = readPrivate<FileRecord[]>(directory, 'files.json', []);
     check(Array.isArray(this.rows) && this.rows.length <= 2560, 'Invalid file ledger', 500);
     for (const row of this.rows) { check(identifier(row.id) && identifier(row.owner) && ['input','output'].includes(row.kind) && Number.isSafeInteger(row.expires) && Number.isSafeInteger(row.bytes) && row.bytes > 0 && row.bytes <= PART_BYTES && typeof row.mime === 'string', 'Invalid file record', 500); filename(row.name); }
@@ -201,7 +202,8 @@ export class Files {
       return type ? [{type,mimeType:row.mime,data},resource] : [resource];
     });
   }
-  async outputs(job: Pick<JobRecord, 'id' | 'finished'>, values: unknown, callerSignal?: AbortSignal) {
+  /** Download, store and check returned files. `secrets` are the live tokens no returned file may show. */
+  async outputs(job: Pick<JobRecord, 'id' | 'finished'>, values: unknown, callerSignal?: AbortSignal, secrets: readonly string[] = []) {
     check(Array.isArray(values) && values.length > 0 && values.length <= 10, 'Return 1-10 files');
     const rows: FileRecord[] = []; let total = 0;
     const timeout = AbortSignal.timeout(30000);
@@ -225,6 +227,8 @@ export class Files {
         total += result.data.length; check(total <= REQUEST_BYTES, 'Returned files exceed 50 MiB',413);
         check(!job.finished, 'Job ended during download',409,'stale_claim');
         const row = this.put(job.id,'output',name,result.data,this.now()+600000); rows.push(row);
+        await this.scan.check(this.path(row), result.data, row.mime, secrets, callerSignal);
+        check(!job.finished, 'Job ended during file check',409,'stale_claim');
       }
       return rows.map(({id,name,mime,bytes}) => ({id,name,mime,bytes}));
     } catch (error) {

@@ -118,6 +118,8 @@ export async function main(argv: string[] = process.argv.slice(2), env: Record<s
     }
     check(!flags.bridge || process.platform === 'darwin', 'The tools bridge requires the macOS local-network sandbox. On Linux, omit --bridge; workers and file tools can run without it.', 503);
     const app = await createApp({ workbench, bridge: flags.bridge, audio: {enabled: !flags['no-audio-transcription'], locale: flags['speech-locale']}, directory: flags['state-dir'] ?? defaultDirectory(env), apiKey: env.CROSSFEED_API_KEY, apiPort: port, mcpPort: Number(flags['mcp-port'] ?? 4320), config });
+    // Build the returned-image checker and load its Vision model before the first returned image needs it.
+    if (process.platform === 'darwin') app.files.scan.warm().catch(() => { /* each returned image is still checked, or refused, on demand */ });
     let closing = false;
     const stop = async () => { if (closing) return; closing = true; await app.close(); };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);

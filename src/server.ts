@@ -133,6 +133,7 @@ async function startApp(options: AppOptions, release: () => void) {
       ['issued','claimed','expired'].includes(ticket.state))
     .map(ticket => ticket.expires_at));
   gateway.picker = (name,id) => wakes.observation(name,id);
+  gateway.liveTokens = () => [options.apiKey, ...[...wakes.tickets.values()].map(t => t.nonce)];
   gateway.composer = job => {check(pairing.enabled,'Approve an extension pairing before composer delivery',503); return wakes.has(job.label,job.id) ? undefined : wakes.enqueueComposer({...job,title:job.request.title,attachments:files.descriptors(job),expires_at:job.deadline} as Parameters<Wakes['enqueueComposer']>[0]);};
   files.reconcile(gateway.jobs);
   gateway.authorizeWorker = (identity,wakeNonce,jobId) => {
