@@ -133,6 +133,16 @@ function workerFixture(options: Record<string, any> = {}) {
             pendingUrl:options.bootstrapPendingForeign ? 'https://evil.example/' : createdURL};
         }
         if (createdURL?.startsWith('chrome-extension://') && !sent) return {id:7,windowId:options.tabWindowId ?? 8,status:'complete',url:options.bootstrapForeign ? 'https://evil.example/' : createdURL,title:options.bootstrapNeverReady ? 'Loading' : 'Crossfeed Wake '+new URL(createdURL).searchParams.get('marker')};
+        // ChatGPT's startup account refresh: a fresh root load client-redirects to this URL, then back to the root.
+        if (options.accountRefresh && !sent && !events.some(e => e.update)) {
+          const refresh = 'https://chatgpt.com/?refresh_account=true&startup_account_refresh=true';
+          const step = rootLoads++;
+          if (step === 0) return {id: 7, windowId: 8, status: 'loading', url: 'https://chatgpt.com/', pendingUrl: refresh};
+          if (step === 1) return {id: 7, windowId: 8, status: options.accountRefresh === 'stuck' ? 'complete' : 'loading', url: refresh};
+          if (options.accountRefresh === 'stuck') { clock += 60000; return {id: 7, windowId: 8, status: 'complete', url: refresh}; }
+          if (step === 2) return {id: 7, windowId: 8, status: 'loading', url: refresh, pendingUrl: 'https://chatgpt.com/'};
+          if (step === 3) events.push({rootLoaded: true});
+        }
         if (options.initialRootLoading && !sent && !events.some(e => e.update)) {
           if (++rootLoads < 3) return {id: 7, windowId: 8, status: 'loading', url: 'https://chatgpt.com/'};
           if (rootLoads === 3) events.push({rootLoaded: true});
@@ -320,6 +330,25 @@ test('configured picker activates the loaded renderer and retries ignored initia
   assert.equal(f.events.filter(e => e.params?.x === 6 && e.params.type === 'mouseReleased').length, 2);
   assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
   assert.equal(prefillCount(f), 1);
+});
+
+test('configured wake waits through ChatGPT\'s startup account refresh at the bare root', async () => {
+  // Chrome history, 9 Nov 2026 23:19:57-59Z: a latest-xhigh wake loaded chatgpt.com/, which redirected to
+  // /?refresh_account=true&startup_account_refresh=true and back. The wake failed 'page_changed at claim'
+  // and closed the tab, so the refresh never finished and each next wake failed the same way.
+  const f = workerFixture({wakeMode: 'configured', accountRefresh: 'once'}); await run(f);
+  const loaded = f.events.findIndex(e => e.rootLoaded);
+  const firstScript = f.events.findIndex(e => e.script || e.probe || e.method);
+  assert(loaded >= 0 && firstScript > loaded, 'no page code or input runs before the refresh returns to the root');
+  assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true);
+  assert.equal(prefillCount(f), 1);
+});
+
+test('a startup account refresh that never returns to the root fails with its own named reason', async () => {
+  const f = workerFixture({wakeMode: 'configured', accountRefresh: 'stuck'}); await run(f);
+  const result = f.events.find(e => e.path === '/extension/result')?.body;
+  assert.equal(result?.ok, false); assert.equal(result.error, 'account_refresh'); assert.equal(result.stage, 'claim');
+  assert.equal(prefillCount(f), 0);
 });
 
 test('configured picker waits for delayed level announcements without weakening the receipt', async () => {

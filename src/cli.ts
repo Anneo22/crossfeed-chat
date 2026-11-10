@@ -51,7 +51,7 @@ export function diagnose(status: ReturnType<App['status']>) {
   for (const job of status.jobs) if (job.error === 'uncertain_delivery') problems.push(`${job.label}: a delivered request has an unknown outcome (${job.id}). Next: inspect its ChatGPT chat before submitting new work; retrying its key returns the recorded error.`);
   for (const wake of status.wakes) if (['failed', 'expired'].includes(wake.state)) {
     const details = [wake.failure_code ? `reason=${wake.failure_code}` : '', wake.failure_stage ? `stage=${wake.failure_stage}` : ''].filter(Boolean).join(', ');
-    const next = wake.failure_code === 'level_unavailable' ? 'choose a level available on your ChatGPT plan (Plus: 0 Instant, 1 Medium, 2 High), then run worker set ' + wake.label + ' --level LEVEL and retry after the cooldown' : 'check the extension pairing, browser extension permissions and the signed-in ChatGPT page, then retry after the cooldown';
+    const next = wake.failure_code === 'account_refresh' ? "ChatGPT's startup account refresh (/?refresh_account=true&startup_account_refresh=true) did not return to chatgpt.com within the wake window. Open chatgpt.com once in the paired browser and let it finish loading, then retry" : wake.failure_code === 'level_unavailable' ? 'choose a level available on your ChatGPT plan (Plus: 0 Instant, 1 Medium, 2 High), then run worker set ' + wake.label + ' --level LEVEL and retry after the cooldown' : 'check the extension pairing, browser extension permissions and the signed-in ChatGPT page, then retry after the cooldown';
     problems.push(`${wake.label}: fresh-chat wake failed${details ? ` (${details})` : ''}. Next: ${next}.`);
   }
   for (const issue of status.host_checks?.issues ?? []) problems.push(issue);

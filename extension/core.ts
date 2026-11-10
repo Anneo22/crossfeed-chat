@@ -39,7 +39,7 @@ function ordinaryWakePhase(value: unknown, prompt: string): -1 | 0 | 1 | 2 {
 const wakeDiagnosticCheckpoints = new Set(['tab_wait', 'probe_result', 'probe_binding', 'before_send', 'prefill_model', 'registration_wait', 'registration_probe']);
 const wakeDiagnosticStatuses = new Set(['complete', 'loading', 'missing', 'other']);
 const wakeDiagnosticURIClasses = new Set(['missing', 'blank', 'native_q', 'native_prompt', 'root', 'root_other_query', 'login', 'conversation', 'foreign', 'other']);
-const wakeDiagnosticQueryNames = new Set(['q', 'prompt', 'model', 'temporary-chat', 'hints', 'ref', 'utm_source', 'utm_campaign', 'other']);
+const wakeDiagnosticQueryNames = new Set(['q', 'prompt', 'model', 'temporary-chat', 'hints', 'ref', 'utm_source', 'utm_campaign', 'refresh_account', 'startup_account_refresh', 'other']);
 
 function wakeURLDiagnostic(value: unknown, prompt: string) {
   let uriClass = 'missing', parsedPhase = -1, queryCount = 0;
@@ -538,7 +538,9 @@ export async function clearOwnedWakeTabs(browser: PollBrowser): Promise<void> {
   await storeOwnedWakeTabs(browser, []);
 }
 
-const reasons = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'mode_unconfirmed',
+// ChatGPT's own startup account refresh round trip (seen 4 and 9 Nov 2026).
+const accountRefresh = 'https://chatgpt.com/?refresh_account=true&startup_account_refresh=true';
+const reasons = new Set(['invalid_ticket', 'page_not_ready', 'page_changed', 'account_refresh', 'mode_unconfirmed',
   'level_unconfirmed', 'permission_unconfirmed', 'upload_unconfirmed', 'upload_failed', 'composer_not_empty', 'mention_unconfirmed', 'send_unconfirmed', 'claim_refused', 'expired', 'browser_error', 'rate_limited']);
 
 export async function request(config: APIConfig, path: string, body: unknown, fetcher: Fetcher = fetch): Promise<APIReply> {
@@ -1011,12 +1013,17 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
         await dispatch('Input.dispatchMouseEvent', {type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1});
       };
       // Wait for the new document before binding subsequent reads and input.
+      // ChatGPT's startup account refresh redirects a fresh root to accountRefresh and back. No page code
+      // runs before the root returns; closing the tab mid-refresh would make every next wake repeat it.
+      let refreshing = false, loaded = false;
       while (now() < activeTicket.expires_at) {
         const current = await browser.tabs.get(activeTab.id);
-        if (current.status === 'complete' && current.url === home && !current.pendingUrl) break;
-        if (current.url && !['about:blank', home].includes(current.url) || current.pendingUrl && current.pendingUrl !== home) throw Error('page_changed');
+        if (current.status === 'complete' && current.url === home && !current.pendingUrl) { loaded = true; break; }
+        if (current.url === accountRefresh || current.pendingUrl === accountRefresh) refreshing = true;
+        if (current.url && !['about:blank', home, accountRefresh].includes(current.url) || current.pendingUrl && ![home, accountRefresh].includes(current.pendingUrl)) throw Error('page_changed');
         await pause(200);
       }
+      if (!loaded && refreshing) throw Error('account_refresh');
       // Activate the loaded renderer, not the transient document it replaced.
       // Hidden worker tabs need this for trusted pointer and keyboard input.
       await browser.debugger.sendCommand({tabId: activeTab.id}, 'Emulation.setFocusEmulationEnabled', {enabled: true});

@@ -53,3 +53,16 @@ test('Linux capability path preserves file tools and refuses command execution, 
   const note = await audio.blocks([{id: 'a', name: 'voice.wav', mime: 'audio/wav', bytes: 1, path: root + '/voice.wav'}]);
   assert.match(note[0].text, /local transcription unavailable/);
 });
+
+test('doctor names ChatGPT\'s startup account refresh when it stops a wake', async () => {
+  const { Wakes } = await import('../src/wake.ts');
+  const config: any = {connector: 'crossfeed', labels: {pro: {row: 'GPT-6', level: 4}}, wake_state: {wakes: [], failed: {}, cooldown_until: 0, archives: []}};
+  const wakes = new Wakes(config, () => 1000);
+  wakes.enqueue('pro');
+  const ticket = wakes.next().ticket!; wakes.claim(ticket.nonce);
+  wakes.result({nonce: ticket.nonce, ok: false, error: 'account_refresh', stage: 'claim'});
+  const wake = wakes.tickets.get(ticket.nonce)!;
+  assert.equal(wake.failure_code, 'account_refresh'); assert.equal(wake.failure_stage, 'claim');
+  const status: any = {host_available: true, capacity: {claimed: 0, limit: 4}, workers: [], jobs: [], wakes: [{label: 'pro', state: 'failed', failure_code: 'account_refresh', failure_stage: 'claim'}], approvals: [], extension_enabled: true, wake_limits: {cooldown_until: 0}};
+  assert.match(diagnose(status).join('\n'), /pro: fresh-chat wake failed \(reason=account_refresh, stage=claim\)\. Next: ChatGPT's startup account refresh .*refresh_account=true.* Open chatgpt\.com once/);
+});
