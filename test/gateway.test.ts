@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Gateway, validateRequest } from '../src/gateway.ts';
+import { Gateway, INSTRUCTIONS, validateRequest } from '../src/gateway.ts';
 
 const config: any = { prefix: 'chatgpt', labels: { alpha: {}, beta: {} } };
 const request = (name = 'alpha', extra: Record<string, any> = {}) => ({ model: `chatgpt:${name}`, messages: [{ role: 'user', content: 'Answer this' }], ...extra });
@@ -1229,4 +1229,16 @@ test('long multi-turn session grants a fresh deadline for each separately claime
     assert.equal((await result).choices[0].message.content,'answer-'+round);
   }
   assert.equal(g.capacity().claimed,0);
+});
+
+test('a request without caller tools tells the worker to run ChatGPT\'s own image tool itself', async t => {
+  // Live 10 Nov 2026 (media-unattended): asked for an image, the worker returned its image tool as
+  // tool_calls, was refused 'Function was not advertised' and then gave up with a worker error.
+  assert.match(INSTRUCTIONS, /Only functions listed in request\.tools are caller tools/);
+  assert.match(INSTRUCTIONS, /image generation.*yours to run/);
+  const g = gateway(t); await awake(g);
+  const result = g.submit(request('alpha')); const claimed = await awake(g);
+  await assert.rejects(complete(g, claimed, { tool_calls: [call('image_gen')] }), (e: any) => e.status === 400 && /lists no caller tools.*image generation.*files/.test(e.message));
+  assert.equal(g.status().find(w => w.label === 'alpha')!.busy, true, 'the claim stays open for a corrected answer');
+  await complete(g, claimed, { response: 'Here it is.' }); await result;
 });
