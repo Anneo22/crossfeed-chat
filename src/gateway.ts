@@ -97,15 +97,16 @@ export function validateRequest(value: unknown, prefix: string, stored = false):
   check(Buffer.byteLength(JSON.stringify(result)) <= 1024 * 1024, 'Completion too large', 413);
   return result;
 }
+const NO_CALLER_TOOLS = "Function was not advertised: this request lists no caller tools. Run ChatGPT's own tools, such as image generation, yourself and return generated files through files";
 function completion(args: ExchangeArguments, request: Request): Completion {
   check(!(args.error !== undefined && (args.response !== undefined || args.tool_calls !== undefined || args.files !== undefined)), 'error is exclusive with response/tool_calls');
   if (args.error !== undefined) { text(args.error, 'worker error', 8192); return { error: true, code: args.error === 'rate_limited' ? 'rate_limited' : 'worker_error' }; }
   const output: Completion = { role: 'assistant', content: args.response ?? null };
   if (output.content != null) output.content = text(output.content, 'response', 768 * 1024, true).replace(/\uE200cite[^\uE200\uE201]*\uE201/g, '');
+  check(args.tool_calls === undefined || !!request.tools?.length, NO_CALLER_TOOLS);
   if (args.tool_calls !== undefined) output.tool_calls = calls(args.tool_calls);
   check(output.content !== null || output.tool_calls?.length || args.files?.length, 'Completion needs response, files or tool_calls');
   const toolCalls = output.tool_calls ?? [];
-  check(!toolCalls.length || request.tools?.length, "Function was not advertised: this request lists no caller tools. Run ChatGPT's own tools, such as image generation, yourself and return generated files through files");
   check(toolCalls.every(c => request.tools?.some(t => t.function.name === (c as {function: {name: string}}).function.name)), 'Function was not advertised');
   check(request.tool_choice !== 'none' || !toolCalls.length, 'tool_choice forbids calls');
   check(request.tool_choice !== 'required' || toolCalls.length, 'tool_choice requires calls');
@@ -685,7 +686,9 @@ export class Gateway {
     if (job) {
       const workerRequest = structuredClone(job.request);
       delete workerRequest.title;
-      return { state: 'request' as const, continue: true, request: { request_id: job.id, claim_token: job.claim, ...workerRequest } };
+      // Live 10 Nov 2026: without this, image workers returned their own image tool as tool_calls.
+      const callerTools = workerRequest.tools?.length ? {} : {caller_tools: "none. Run ChatGPT's own tools, such as image generation, yourself; return generated files through files"};
+      return { state: 'request' as const, continue: true, request: { request_id: job.id, claim_token: job.claim, ...workerRequest, ...callerTools } };
     }
     if (this.now() >= w.idleUntil!) { w.stale = true; return {state: 'released' as const, continue: false, reason: 'Idle worker lease expired'}; }
     return { state: 'idle' as const, continue: true, waited_seconds: seconds };

@@ -1238,6 +1238,8 @@ test('a request without caller tools tells the worker to run ChatGPT\'s own imag
   assert.match(INSTRUCTIONS, /image generation.*yours to run/);
   const g = gateway(t); await awake(g);
   const result = g.submit(request('alpha')); const claimed = await awake(g);
+  assert.match((claimed as any).request.caller_tools, /^none\. Run ChatGPT's own tools, such as image generation, yourself/);
+  await assert.rejects(complete(g, claimed, { tool_calls: [{ ...call('image_gen'), function: { name: 'image_gen.text2im', arguments: '{}' } }] }), (e: any) => e.status === 400 && /lists no caller tools.*image generation.*files/.test(e.message));
   await assert.rejects(complete(g, claimed, { tool_calls: [call('image_gen')] }), (e: any) => e.status === 400 && /lists no caller tools.*image generation.*files/.test(e.message));
   assert.equal(g.status().find(w => w.label === 'alpha')!.busy, true, 'the claim stays open for a corrected answer');
   await complete(g, claimed, { response: 'Here it is.' }); await result;
