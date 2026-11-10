@@ -12,9 +12,10 @@ function walk(directory: string) {
   }
 }
 walk('.');
+// Node runs this TypeScript by stripping types, so 'strip' is the mode to check; Node 26 removed 'transform'.
 for (const file of files.sort()) {
   const result = file.endsWith('.ts')
-    ? spawnSync(process.execPath, ['--input-type=module', '--check'], {input: (stripTypeScriptTypes as (source: string, options: {mode: 'transform'}) => string)(fs.readFileSync(file, 'utf8'), {mode: 'transform'}), stdio: ['pipe', 'inherit', 'inherit']})
+    ? spawnSync(process.execPath, ['--input-type=module', '--check'], {input: stripTypeScriptTypes(fs.readFileSync(file, 'utf8'), {mode: 'strip'}), stdio: ['pipe', 'inherit', 'inherit']})
     : spawnSync(process.execPath, ['--check', file], {stdio: 'inherit'});
   if (result.status !== 0) process.exit(1);
 }

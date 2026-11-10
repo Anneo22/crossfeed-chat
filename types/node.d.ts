@@ -169,7 +169,7 @@ declare module 'node:util' {
   type Value<O> = O extends {multiple: true} ? string[] : O extends {type: 'boolean'} ? boolean : string;
   export function parseArgs<O extends ArgOptions>(config: {args?: string[]; allowPositionals?: boolean; strict?: boolean; options: O}): {values: {[K in keyof O]?: Value<O[K]>}; positionals: string[]};
 }
-declare module 'node:module' { export const createRequire: any; export function stripTypeScriptTypes(code: string): string; }
+declare module 'node:module' { export const createRequire: any; export function stripTypeScriptTypes(code: string, options?: {mode?: 'strip'; sourceUrl?: string}): string; }
 declare module 'node:vm' {
   const vm: {runInNewContext(code: string, context?: Record<string, any>): any};
   export default vm;
