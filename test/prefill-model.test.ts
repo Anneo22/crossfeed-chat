@@ -8,7 +8,9 @@ const prompt = (t:ReturnType<typeof ticket>) => `@${t.connector} wake up. First 
 function fixture(options:Record<string,any>={}) {
   let modelReads=0, statusReads=0, sliderReads=0, hitReads=0;
   const node=(value='',attrs:Record<string,string>={}):any=>({textContent:value,isConnected:true,getClientRects:()=>[1],closest:()=>null,getAttribute:(name:string)=>attrs[name]??null,querySelectorAll:()=>[],getBoundingClientRect:()=>({x:10,y:20,width:40,height:30}),click:()=>assert.fail('page proof must not synthesize click'),dispatchEvent:()=>assert.fail('page proof must not synthesize pointer input')});
+  let rowReads=0;
   const row=node(options.row??'Latest',{'aria-checked':'true'});
+  if(options.rowLagReads) Object.defineProperty(row,'textContent',{get:()=>++rowReads<=options.rowLagReads?options.staleRow:options.row??'Latest'});
   const slider=node('',{'aria-valuemin':options.minimum??'0','aria-valuemax':options.maximum??'2','aria-valuenow':options.position??'2'});
   const status=node(options.status??'High, 3 of 3.');
   const menu=node();menu.querySelectorAll=(selector:string)=>selector==='[role="menuitemradio"]'?(options.duplicateRow?[row,row]:[row]):selector==='[role="slider"]'?[(++sliderReads <= (options.positionLagReads??0) ? {...slider,getAttribute:(name:string)=>name==='aria-valuenow'?options.stalePosition:slider.getAttribute(name)} : slider)]:selector==='[role="status"]'?[(status.textContent=++statusReads <= (options.statusLagReads??0) ? options.staleStatus : options.status??'High, 3 of 3.',status)]:[];
@@ -60,6 +62,15 @@ test('configured Pro proof waits for the native picker announcement to catch up'
 });
 test('configured native proof waits for a hydrated old thumb to settle to the requested level',async()=>{
   assert.deepEqual(await run({positionLagReads:2,stalePosition:'1',timeoutMs:500}),{verified:true,row:'Latest',level:2,maximum:2});
+});
+test('configured native proof waits for a hydrated default row to settle to the saved row',async()=>{
+  assert.deepEqual(await run({rowLagReads:3,staleRow:'Other',positionLagReads:3,stalePosition:'1',timeoutMs:500}),{verified:true,row:'Latest',level:2,maximum:2});
+});
+test('configured native proof refuses a row that never settles within the proof budget',async()=>{
+  const result=await run({row:'Other',timeoutMs:50});
+  assert.equal(result.verified,false);
+  assert.equal(result.error,'level_unconfirmed');
+  assert.equal(result.diagnostic?.rowMatches,false);
 });
 test('pointer acquisition waits up to the native hydration budget, without extending exact model proof',async t=>{
   let clock=Date.now(); t.mock.method(Date,'now',()=>clock);

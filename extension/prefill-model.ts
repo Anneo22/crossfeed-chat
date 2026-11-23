@@ -68,10 +68,13 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
           const status = all(ownedMenu, '[role="status"]').map(text).filter(value => / of /i.test(value));
           const bounded = (value: string | null) => value !== null && /^[0-4]$/.test(value) ? Number(value) : -1;
           Object.assign(diagnostic,{rowMatches:exactRow,minimum:bounded(slider.getAttribute('aria-valuemin')),maximum:bounded(slider.getAttribute('aria-valuemax')),position:bounded(position),statusMatches:status.length===1&&status[0]===`${levels[ticket.level]}, ${ticket.level+1} of ${expectedMaximum+1}.`});
-          if (!exactRow || slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum)) return fail('level_unconfirmed');
+          // The native document can first show a default row before the saved
+          // selection hydrates. Wait for it like the thumb; only the saved
+          // row's own range is final.
+          if (exactRow && (slider.getAttribute('aria-valuemin') !== '0' || slider.getAttribute('aria-valuemax') !== String(expectedMaximum))) return fail('level_unconfirmed');
           // Thumb and announcement hydrate independently. Wait for exact
           // agreement, never change the selection or accept a stale proof.
-          if (position === String(ticket.level) && status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
+          if (exactRow && position === String(ticket.level) && status.length === 1 && status[0] === `${levels[ticket.level]}, ${ticket.level + 1} of ${expectedMaximum + 1}.`)
             return {verified: true, row: ticket.row, level: ticket.level, maximum: expectedMaximum};
         }
       }
