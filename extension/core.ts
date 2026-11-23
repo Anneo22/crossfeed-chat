@@ -2,7 +2,7 @@ import { pageWake, prefillProbe, prefillModel, prefillWake, pagePermission } fro
 import { ensurePairing } from './pairing.ts';
 import type {
   APIConfig, APIReply, DebugReply, Fetcher, Injection, OwnedWakeTab, PageAction,
-  PageProbe, PageTicket, PollBrowser, PrefillModelResult, PrefillProbeResult,
+  PageProbe, PageTicket, PollBrowser, PrefillModelResult, PrefillProbeResult, PrefillSelection,
   PrefillWakeResult, Tab, Ticket,
 } from './types.d.ts';
 
@@ -797,11 +797,11 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
           // across native navigation; never silently fall back to defaults.
           stage = 'prefillModel';
           const modelMetrics = {clicks: 0, pointMoved: false};
-          const modelRead = async (action: 'point' | 'observe'): Promise<PrefillModelResult> => {
+          const modelRead = async (action: 'point' | 'observe' | 'select' | 'sliderFocus'): Promise<PrefillModelResult> => {
             const current = await getOwnedTab(), phase = ordinaryWakePhase(current.url, prompt);
             if (current.pendingUrl || !['complete', 'loading'].includes(current.status ?? '') || phase < nativePhase) throw Error('page_changed');
             nativePhase = phase;
-            const args: [PageTicket, number, number, number, 'point' | 'observe'] =
+            const args: [PageTicket, number, number, number, 'point' | 'observe' | 'select' | 'sliderFocus'] =
               [pageTicket, expectedMaximum, Math.max(1, Math.min(action === 'point' ? 15000 : 5000, activeTicket.expires_at - now())), 50, action];
             const [value]: Injection<PrefillModelResult>[] = await pageScript({
               target: {tabId: activeTab.id, documentIds: [documentId]}, func: prefillModel, args,
@@ -837,15 +837,72 @@ export function makePoller(browser: PollBrowser, fetcher: Fetcher = fetch, now: 
             await browser.debugger.sendCommand({tabId: activeTab.id}, method, params);
             if (method === 'Input.dispatchMouseEvent' && params.type === 'mouseReleased') modelMetrics.clicks = Math.min(8, modelMetrics.clicks + 1);
           };
-          const openDeadline = Math.min(activeTicket.expires_at, now() + 5000);
-          while (!(await modelRead('point')).open) {
-            if (now() >= openDeadline) throw Error('level_unconfirmed');
-            const p = (await modelRead('point')).modelPoint;
-            if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('level_unconfirmed');
-            for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
-              await input('Input.dispatchMouseEvent', {type, x: p.x, y: p.y, ...(type !== 'mouseMoved' ? {button: 'left', clickCount: 1} : {})});
+          const openMenu = async (): Promise<void> => {
+            const openDeadline = Math.min(activeTicket.expires_at, now() + 5000);
+            while (!(await modelRead('point')).open) {
+              if (now() >= openDeadline) throw Error('level_unconfirmed');
+              const p = (await modelRead('point')).modelPoint;
+              if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('level_unconfirmed');
+              for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+                await input('Input.dispatchMouseEvent', {type, x: p.x, y: p.y, ...(type !== 'mouseMoved' ? {button: 'left', clickCount: 1} : {})});
+              }
+              await pause(100);
             }
-            await pause(100);
+          };
+          await openMenu();
+          // From 23 Nov 2026 ChatGPT re-applies a default row at level 4 in
+          // each fresh document, so the saved choice made and receipted on the
+          // root does not survive native navigation. Re-select the saved row
+          // and level here with the root's trusted input sequence, each input
+          // re-attested in this pinned document. The read-only proof below
+          // still decides; a missing or ambiguous saved row refuses.
+          const selection = async (): Promise<PrefillSelection | null> => {
+            const value = await modelRead('select');
+            return value.open === true && value.selection ? value.selection : null;
+          };
+          const canonical = (s: PrefillSelection, position?: number) => s.row && s.minimum === 0 && s.maximum === expectedMaximum &&
+            Number.isInteger(s.position) && s.position >= 0 && s.position <= expectedMaximum && (position === undefined || s.position === position) &&
+            s.status === `${levels[s.position]}, ${s.position + 1} of ${expectedMaximum + 1}.`;
+          const settle = async (accept: (s: PrefillSelection) => boolean, reopen: boolean): Promise<PrefillSelection> => {
+            const deadline = Math.min(activeTicket.expires_at, now() + 5000);
+            while (now() < deadline) {
+              const s = await selection();
+              if (!s && !reopen) throw Error('level_unconfirmed');
+              // Choosing a row may close ChatGPT's menu; reopen it the same way.
+              if (!s) { await openMenu(); continue; }
+              if (accept(s)) return s;
+              // The saved row's own range is final; never step another range.
+              if (s.row && s.minimum >= 0 && s.maximum >= 0 && (s.minimum !== 0 || s.maximum !== expectedMaximum)) throw Error('level_unconfirmed');
+              await pause(100);
+            }
+            throw Error('level_unconfirmed');
+          };
+          const tap = async (target: 'rowPoint' | 'viewPoint'): Promise<void> => {
+            for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+              const p = (await selection())?.[target];
+              if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error('level_unconfirmed');
+              await browser.debugger.sendCommand({tabId: activeTab.id}, 'Input.dispatchMouseEvent', {type, x: p.x, y: p.y, ...(type !== 'mouseMoved' ? {button: 'left', clickCount: 1} : {})});
+            }
+            modelMetrics.clicks = Math.min(8, modelMetrics.clicks + 1);
+          };
+          let chosen = await settle(() => true, false);
+          if (!chosen.row) {
+            if (!chosen.rowPoint) { await tap('viewPoint'); chosen = await settle(s => s.row || !!s.rowPoint, false); }
+            if (!chosen.row) { await tap('rowPoint'); chosen = await settle(s => s.row, true); }
+          }
+          chosen = await settle(s => canonical(s), true);
+          if (chosen.position !== activeTicket.level) {
+            if ((await modelRead('sliderFocus')).focused !== true) throw Error('level_unconfirmed');
+            let cursor = chosen.position;
+            while (cursor !== activeTicket.level) {
+              await settle(s => canonical(s, cursor), false);
+              const step = cursor < activeTicket.level ? 'ArrowRight' : 'ArrowLeft';
+              for (const type of ['keyDown', 'keyUp']) {
+                await input('Input.dispatchKeyEvent', {type, key: step, code: step, windowsVirtualKeyCode: step === 'ArrowRight' ? 39 : 37});
+              }
+              cursor += step === 'ArrowRight' ? 1 : -1;
+              await settle(s => canonical(s, cursor), false);
+            }
           }
           const model = await modelRead('observe');
           if (model.verified !== true || model.row !== activeTicket.row ||

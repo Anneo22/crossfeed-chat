@@ -1,8 +1,10 @@
 import type { PageTicket, PrefillModelResult } from './types.d.ts';
 
-/** Read-only model attestation in the same document authorized by prefillProbe.
- * The host opens/closes the picker with trusted pointer/Escape input, never .click(). */
-export async function prefillModel(ticket: PageTicket, expectedMaximum: number, timeoutMs = 5000, pollMs = 50, action: 'point' | 'observe' = 'observe'): Promise<PrefillModelResult> {
+/** Model attestation in the same document authorized by prefillProbe.
+ * 'point', 'select' and 'observe' only read; 'sliderFocus' only focuses the
+ * open menu's slider. The host opens the picker, re-selects the saved row and
+ * level with trusted pointer/key input, and closes it, never .click(). */
+export async function prefillModel(ticket: PageTicket, expectedMaximum: number, timeoutMs = 5000, pollMs = 50, action: 'point' | 'observe' | 'select' | 'sliderFocus' = 'observe'): Promise<PrefillModelResult> {
   const ownedDocument = document;
   const tail = ` wake up. First gateway_exchange: worker_label=${JSON.stringify(ticket.label)} exactly as issued, wake_nonce=${JSON.stringify(ticket.nonce)}, maximum_wait_seconds=20. Then use the server-returned worker_label and repeat wake_nonce=${JSON.stringify(ticket.nonce)} on all subsequent gateway_exchange calls. Poll until state=released and continue=false; do not send a final chat reply between jobs. Return local caller tools as structured tool_calls through gateway_exchange; do not execute them natively.`;
   const prompt = `@${ticket.connector}${tail}`;
@@ -53,6 +55,34 @@ export async function prefillModel(ticket: PageTicket, expectedMaximum: number, 
         // needs only read authority for Escape, not another trigger click.
         if (menus.length === 1 || diagnostic.hitOwned)
           return {verified: false, ready: true, modelPoint: {x, y}, open: menus.length === 1};
+      }
+      // One snapshot per call; the host loops, re-attesting before each input.
+      if (enabled && action === 'select') {
+        if (menus.length !== 1) return {verified: false, ready: true, open: false};
+        const menu = menus[0];
+        const rows = [...menu.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[];
+        const named = (row: HTMLElement) => text(row) === ticket.row || all(row, 'span').some(span => text(span) === ticket.row);
+        const checked = rows.filter(row => row.getAttribute('aria-checked') === 'true');
+        const saved = rows.filter(named);
+        const target = saved.length === 1 && visible(saved[0]) && saved[0].getAttribute('aria-disabled') !== 'true' ? saved[0] : null;
+        const toggles = all(document, '[data-model-picker-view-toggle="true"]');
+        const sliders = all(menu, '[role="slider"]');
+        const center = (el: HTMLElement | null) => { if (!el) return null; const r = el.getBoundingClientRect(); const p = {x: r.x + r.width / 2, y: r.y + r.height / 2}; return [p.x, p.y, r.width, r.height].every(Number.isFinite) && r.width > 0 && r.height > 0 ? p : null; };
+        const bounded = (value: string | null | undefined) => value != null && /^[0-4]$/.test(value) ? Number(value) : -1;
+        const status = all(menu, '[role="status"]').map(text).filter(value => / of /i.test(value));
+        const slider = sliders.length === 1 ? sliders[0] : null;
+        const row = checked.length === 1 && saved.length === 1 && checked[0] === saved[0];
+        Object.assign(diagnostic, {selected: Math.min(8, checked.length), sliders: Math.min(8, sliders.length), rowMatches: row});
+        return {verified: false, ready: true, open: true, diagnostic, selection: {row, rowPoint: center(target), viewPoint: center(toggles.length === 1 ? toggles[0] : null),
+          minimum: bounded(slider?.getAttribute('aria-valuemin')), maximum: bounded(slider?.getAttribute('aria-valuemax')), position: bounded(slider?.getAttribute('aria-valuenow')),
+          status: status.length === 1 ? status[0] : null}};
+      }
+      if (enabled && action === 'sliderFocus') {
+        if (menus.length !== 1) return fail('level_unconfirmed');
+        const sliders = all(menus[0], '[data-reasoning-slider="true"]');
+        if (sliders.length !== 1) return fail('level_unconfirmed');
+        sliders[0].focus();
+        return {verified: false, focused: document.activeElement === sliders[0]};
       }
       if (enabled && action === 'observe' && menus.length === 1) {
         if (ownedMenu && ownedMenu !== menus[0]) return fail('page_changed');

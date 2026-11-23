@@ -78,7 +78,7 @@ test('private legacy bootstrap stays packaged and validates one exact 128-bit ti
 function workerFixture(options: Record<string, any> = {}) {
   const events: any[] = [];
   let clock = Date.now(), row = options.row ?? 'Older', position = 2, chat = options.chat ?? false, sent = false, returned = false, pendingMention = false, pickerOpen = false, registrationReads = 0, registrationScripts = 0, tabReads = 0, checks = 0, rootLoads = 0, pickerClicks = 0, previousPosition = position, lastKeyAt = -Infinity;
-  let prefillPointReads = 0;
+  let prefillPointReads = 0, prefillList = false;
   const value: any = {...ticket(), ...(Object.hasOwn(options, 'wakeMode') ? {wake_mode: options.wakeMode} : {}), ...(options.composer ? {type: 'composer', job_id: 'job_1', attachments: [{name: 'x.txt', path: '/tmp/x.txt', mime: 'text/plain', bytes: 1}]} : {}), ...(options.ticket ?? {}), expires_at: clock + 240000}, point = (n: any) => ({x: n, y: n});
   const fetcher = async (url: any, init: any) => {
     const path = new URL(url).pathname, body = init.body && JSON.parse(init.body);
@@ -182,7 +182,9 @@ function workerFixture(options: Record<string, any> = {}) {
         }
         return {id: 7, windowId: options.tabWindowId ?? 8, status: 'complete', url: 'https://chatgpt.com/c/new'};
       },
-      update: async (id:any, opts:any) => {options.prefillFocused = false; events.push({update:{id,...opts}});return {id,windowId:8,url:opts.url};},
+      update: async (id:any, opts:any) => {options.prefillFocused = false; events.push({update:{id,...opts}});
+        if (options.prefillReset) { row = options.prefillReset.row; position = options.prefillReset.position; prefillList = false; }
+        return {id,windowId:8,url:opts.url};},
       remove: async (id: any) => events.push({remove: id}),
     },
     tabGroups: {update: async (id: any, opts: any) => events.push({groupUpdate: {id, ...opts}})},
@@ -203,6 +205,8 @@ function workerFixture(options: Record<string, any> = {}) {
             if (++pickerClicks > (options.ignoredPickerClicks ?? 0) && !options.pickerNeverOpens) pickerOpen = !pickerOpen;
           }
           if (params.x === (options.prefillTargetMoves && prefillPointReads >= 4 ? 9 : 8) && !options.prefillPickerNeverOpens) pickerOpen = !pickerOpen;
+          if (params.x === 10) { if (!options.prefillRowIgnored) row = value.row; prefillList = false; if (options.prefillRowCloses) pickerOpen = false; }
+          if (params.x === 11) prefillList = true;
         }
         if (method === 'Input.dispatchKeyEvent' && params.type === 'keyDown') {
           if (['ArrowLeft', 'ArrowRight'].includes(params.key)) { previousPosition = position; lastKeyAt = clock; }
@@ -230,6 +234,13 @@ function workerFixture(options: Record<string, any> = {}) {
         if (isPoint) { prefillPointReads++; clock += options.prefillGuardMs ?? 0; }
         if (options.prefillRequiresFocus && !options.prefillFocused) return [{documentId: 'prefill-document',
           result: {verified: false, error: 'level_unconfirmed', diagnostic: {action: opts.args[4], models: 0, menus: 0}}}];
+        const names = ['Instant', 'Medium', 'High', 'Extra High', 'Pro'];
+        if (opts.args[4] === 'select') return [{documentId: 'prefill-document', result: {verified: false, ready: true, open: pickerOpen,
+          ...(pickerOpen ? {selection: {row: row === value.row, rowPoint: !options.prefillRowHidden && (prefillList || !options.prefillRowNeedsList) ? point(10) : null,
+            viewPoint: point(11), minimum: 0, maximum: row === value.row ? options.prefillSavedMaximum ?? 4 : 4, position, status: `${names[position]}, ${position + 1} of 5.`}} : {})}}];
+        if (opts.args[4] === 'sliderFocus') return [{documentId: 'prefill-document', result: {verified: false, focused: pickerOpen}}];
+        if (options.prefillReset && !isPoint) return [{documentId: 'prefill-document', result: pickerOpen && row === value.row && position === value.level ?
+          {verified: true, row: value.row, level: value.level, maximum: opts.args[1]} : {verified: false, error: 'level_unconfirmed'}}];
         return [{documentId: options.postPrefillDocumentChanged ? 'changed-document' : 'prefill-document',
           result: isPoint ? {verified:false,ready:!options.prefillPointMissing,modelPoint:point(options.prefillTargetMoves && prefillPointReads >= 4 ? 9 : 8),open:pickerOpen} :
             options.postPrefillModelMismatch || !pickerOpen ? {verified: false, error: 'level_unconfirmed',diagnostic:options.postPrefillModelDiagnostic} :
@@ -452,6 +463,42 @@ test('configured prefill model failures are distinct from initial picker failure
   assert(f.events.some(e => e.path === '/extension/observe'));
   assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.stage, 'prefillModel');
   assert.equal(prefillCount(f), 0);
+});
+
+// From 23 Nov 2026 ChatGPT re-applies a default row at level 4 on each fresh
+// document, after the root picker saved and receipted the configured choice.
+test('configured prefill re-selects the saved row and level after ChatGPT resets them in the native document', async () => {
+  for (const reset of [{row: 'GPT-6.2', position: 4}, {row: 'GPT-6.2', position: 0}]) for (const extra of [{}, {prefillRowNeedsList: true}, {prefillRowCloses: true}]) {
+    const f = workerFixture({wakeMode: 'configured', prefillReset: reset, ...extra}); await run(f);
+    const label = JSON.stringify({reset, extra});
+    assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.ok, true, label);
+    assert.equal(prefillCount(f), 1, label);
+    const post = f.events.slice(f.events.findIndex(e => e.update) + 1);
+    const released = post.filter(e => e.method === 'Input.dispatchMouseEvent' && e.params.type === 'mouseReleased').map(e => e.params.x);
+    assert(released.includes(10), label);
+    assert.equal(released.includes(11), !!extra.prefillRowNeedsList, label);
+    const arrows = post.filter(e => e.method === 'Input.dispatchKeyEvent' && e.params.type === 'keyDown' && e.params.key.startsWith('Arrow')).map(e => e.params.key);
+    assert.deepEqual(arrows, Array(Math.abs(reset.position - 3)).fill(reset.position > 3 ? 'ArrowLeft' : 'ArrowRight'), label);
+    // Re-selection happens before the read-only proof, which still precedes the single send.
+    const proof = f.events.findLastIndex(e => e.modelProof?.args?.[4] === 'observe');
+    assert(post.indexOf(f.events[proof]) > post.findIndex(e => e.params?.x === 10), label);
+    assert(proof < f.events.findIndex(e => e.prefill), label);
+  }
+});
+test('configured prefill re-selection refuses without sending when the saved row, range or input does not hold', async () => {
+  for (const options of [{prefillRowHidden: true}, {prefillRowIgnored: true}, {prefillSavedMaximum: 3}]) {
+    const f = workerFixture({wakeMode: 'configured', prefillReset: {row: 'GPT-6.2', position: 4}, ...options}); await run(f);
+    assert.equal(prefillCount(f), 0, JSON.stringify(options));
+    assert.equal(enterCount(f), 0);
+    assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.stage, 'prefillModel');
+    assert.equal(f.events.find(e => e.path === '/extension/result')?.body?.error, 'level_unconfirmed');
+  }
+});
+test('configured prefill does not touch a native document that kept the saved row and level', async () => {
+  const f = workerFixture({wakeMode: 'configured'}); await run(f);
+  const post = f.events.slice(f.events.findIndex(e => e.update) + 1);
+  assert(!post.some(e => [10, 11].includes(e.params?.x) || e.params?.key?.startsWith?.('Arrow')));
+  assert.equal(prefillCount(f), 1);
 });
 
 test('configured prefill seals uncertain execution, closes its owned tab and never resends', async () => {
